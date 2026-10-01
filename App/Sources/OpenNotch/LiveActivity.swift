@@ -61,8 +61,8 @@ struct MusicInfoEar: View {
         let tint = backend.artworkTint ?? Theme.glow[1]
         let t = date.timeIntervalSinceReferenceDate
         VStack(alignment: .leading, spacing: 3.5) {
-            Marquee(text: [np.track, np.artist].filter { !$0.isEmpty }.joined(separator: " · "), t: t)
-                .frame(height: 12)
+            Marquee(text: [np.track, np.artist].filter { !$0.isEmpty }.joined(separator: " · "), t: t, size: 11.5)
+                .frame(height: 14)
             if np.duration > 0 {
                 ProgressLine(value: np.livePosition(date) / np.duration, tint: tint)
                     .frame(height: 2.2)
@@ -270,7 +270,7 @@ private let urgentColors = [Color(red: 1.0, green: 0.45, blue: 0.30), Color(red:
 struct TimerRingEar: View {
     @ObservedObject private var policy = AnimationPolicy.shared
     @ObservedObject var timers: TimerStore
-    var size: CGFloat = 21
+    var size: CGFloat = 23
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / policy.fps, paused: !timers.running && !timers.paused)) { ctx in
@@ -324,11 +324,11 @@ struct TimerClockEar: View {
         let text = TimerStore.clock(timers.remaining)
         VStack(alignment: .leading, spacing: -1) {
             Text(timers.paused ? "PAUSED" : timers.label)
-                .font(.system(size: 7, weight: .heavy, design: .rounded))
+                .font(.system(size: 8.5, weight: .heavy, design: .rounded))
                 .tracking(0.8)
                 .foregroundStyle(colors[0].opacity(0.85))
             Text(text)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(.system(size: 16, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(LinearGradient(colors: [.white, colors.last!], startPoint: .top, endPoint: .bottom))
                 .contentTransition(.numericText(countsDown: timers.kind != .stopwatch))

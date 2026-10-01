@@ -257,7 +257,7 @@ struct HUDLeftEar: View {
                     .symbolEffect(.bounce, value: on)
             }
         }
-        .font(.system(size: 14, weight: .semibold))
+        .font(.system(size: 16, weight: .semibold))
         .contentTransition(.symbolEffect(.replace))
     }
 
@@ -285,7 +285,7 @@ struct HUDRightEar: View {
                     }
                     .frame(height: 5)
                     Text(muted ? "—" : "\(Int((level * 100).rounded()))")
-                        .font(.system(size: 10, weight: .bold, design: .rounded)).monospacedDigit()
+                        .font(.system(size: 12, weight: .bold, design: .rounded)).monospacedDigit()
                         .foregroundStyle(.white.opacity(0.85))
                         .frame(width: 20, alignment: .trailing)
                         .contentTransition(.numericText())
@@ -311,9 +311,9 @@ struct HUDRightEar: View {
 
     private func twoLine(top: String, main: String, sub: String?, color: Color = Theme.glow[0]) -> some View {
         VStack(alignment: .leading, spacing: -1) {
-            Text(top).font(.system(size: 7, weight: .heavy, design: .rounded)).tracking(0.8).foregroundStyle(color)
-            Text(main).font(.system(size: 11.5, weight: .bold, design: .rounded)).foregroundStyle(.white)
-            if let sub { Text(sub).font(.system(size: 8.5, weight: .semibold)).foregroundStyle(Theme.secondary) }
+            Text(top).font(.system(size: 8.5, weight: .heavy, design: .rounded)).tracking(0.8).foregroundStyle(color)
+            Text(main).font(.system(size: 13, weight: .bold, design: .rounded)).foregroundStyle(.white)
+            if let sub { Text(sub).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.secondary) }
         }
         .lineLimit(1)
         .minimumScaleFactor(0.8)

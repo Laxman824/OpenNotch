@@ -137,7 +137,8 @@ enum ProviderStore {
             return OpenAICompatibleProvider(name: k.label, model: model, baseURL: base, apiKey: key,
                                             extraHeaders: headers,
                                             usageInStream: [.openai, .openrouter, .groq].contains(k),
-                                            supportsImages: ![.groq].contains(k))
+                                            supportsImages: ![.groq].contains(k),
+                                            requestReasoning: k == .openrouter)
         }
     }
 

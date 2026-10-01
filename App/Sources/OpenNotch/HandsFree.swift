@@ -47,6 +47,8 @@ final class HandsFree: ObservableObject {
     @Published var lastError: String?
 
     weak var backend: Backend?
+    /// A tool approval we've asked about out loud.
+    private var pendingApproval: Approval?
     /// Asked before starting, so push-to-talk dictation can release the mic.
     var willStart: (() -> Void)?
     /// macOS is about to show a permission prompt — get out of its way.
@@ -192,9 +194,11 @@ final class HandsFree: ObservableObject {
             }
         case .speechIdle:
             speechLevel = 0
-            if phase == .speaking && turnDone {
+            if phase == .speaking && (turnDone || pendingApproval != nil) {
                 lastActivity = Date()
-                listen()
+                listen()                                   // turn over, or waiting for a spoken yes/no
+            } else if phase == .speaking && backend?.busy == true {
+                phase = .thinking                           // said "okay", the agent carries on
             }
         case .engineRestarted(let echo):
             // Audio route changed (AirPods, headphones): keep going.
@@ -293,6 +297,38 @@ final class HandsFree: ObservableObject {
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         transcript = ""
         guard !text.isEmpty else { listen(); return }
+        // Waiting on a yes/no for a tool: answer it, and never send this to the model.
+        if let a = pendingApproval {
+            guard backend?.approvals.contains(where: { $0.id == a.id }) == true else {
+                pendingApproval = nil                      // answered by click meanwhile
+                commit(text: text)
+                return
+            }
+            switch VoiceTurn.approvalAnswer(text) {
+            case true?:
+                pendingApproval = nil
+                backend?.answer(a, allow: true)
+                say("Okay, going ahead.", partOfAnswer: false)
+            case false?:
+                pendingApproval = nil
+                backend?.answer(a, allow: false)
+                say("Okay, I won't.", partOfAnswer: false)
+            case nil:
+                say("Sorry — yes or no?", partOfAnswer: false)
+            }
+            return
+        }
+        commit(text: text)
+    }
+
+    /// A tool needs permission: ask out loud and listen for yes / no.
+    func approvalRequested(_ a: Approval) {
+        guard isOn else { return }
+        pendingApproval = a
+        say(a.spoken.isEmpty ? VoiceTurn.approvalPhrase(tool: a.tool, args: [:]) : a.spoken, partOfAnswer: false)
+    }
+
+    private func commit(text: String) {
         // Local commands: instant, no model call.
         switch VoiceTurn.command(text) {
         case .exit:
@@ -928,6 +964,69 @@ enum VoiceTurn {
         case "new chat", "start over", "new conversation", "clear the chat": return .newChat
         case "show me", "show it", "open the notch", "show me on screen": return .show
         default: return nil
+        }
+    }
+
+    // MARK: Approvals by voice
+
+    /// "yes" / "go ahead" → true, "no" / "cancel" → false, anything else → nil (ask again).
+    static func approvalAnswer(_ text: String) -> Bool? {
+        var t = text.lowercased().replacingOccurrences(of: ",", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".!? "))
+        let n = wakeName.lowercased()
+        for p in ["\(n) ", "hey \(n) ", "um ", "uh ", "well "] where t.hasPrefix(p) { t = String(t.dropFirst(p.count)) }
+        let no = ["no", "nope", "nah", "don't", "dont", "do not", "deny", "cancel", "stop", "never mind", "nevermind",
+                  "no thanks", "don't do it", "not now", "skip", "no way", "don't run it", "not allowed"]
+        let yes = ["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead", "do it", "allow", "approve", "approved",
+                   "yes please", "go for it", "sounds good", "fine", "proceed", "continue", "run it", "yes go ahead", "please do"]
+        // "No" wins ties ("yes— no, don't"): saying no should always be safe.
+        if no.contains(where: { t == $0 || t.hasPrefix($0 + " ") || t.hasSuffix(" " + $0) }) { return false }
+        if yes.contains(where: { t == $0 || t.hasPrefix($0 + " ") }) { return true }
+        return nil
+    }
+
+    /// What Zoe says when a tool needs permission: plain words from the tool's arguments.
+    static func approvalPhrase(tool: String, args: [String: String]) -> String {
+        func short(_ s: String?, _ n: Int = 50) -> String {
+            let v = (s ?? "").replacingOccurrences(of: "\n", with: " ")
+            return v.count > n ? String(v.prefix(n)) + "…" : v
+        }
+        func file(_ p: String?) -> String { ((p ?? "") as NSString).lastPathComponent }
+        let what: String
+        switch tool {
+        case "run_command":
+            let cmd = short(args["command"], 40)
+            what = cmd.isEmpty ? "run a terminal command" : "run a command: \(cmd)"
+        case "write_file": what = "write the file \(file(args["path"]))"
+        case "edit_file": what = "edit \(file(args["path"]))"
+        case "create_event": what = "add “\(short(args["title"]))” to your calendar"
+        case "create_reminder": what = "add a reminder: \(short(args["title"]))"
+        case "mail_draft": what = "open an email draft to \(short(args["to"], 40))"
+        case "notes_create": what = "create a note called “\(short(args["title"]))”"
+        case "schedule_task": what = "schedule this: \(short(args["prompt"]))"
+        default:
+            if tool.hasPrefix("mcp__") {
+                let parts = tool.components(separatedBy: "__")
+                what = "use \(parts.count > 1 ? parts[1] : "a connector") to \(parts.last?.replacingOccurrences(of: "_", with: " ") ?? "do something")"
+            } else {
+                what = "use \(tool.replacingOccurrences(of: "_", with: " "))"
+            }
+        }
+        return "I need your OK to \(what). Say yes to go ahead, or no."
+    }
+
+    /// Two-word label for the closed notch: "Run command", "Edit file" …
+    static func approvalShort(_ tool: String) -> String {
+        switch tool {
+        case "run_command": return "Run command"
+        case "write_file": return "Write file"
+        case "edit_file": return "Edit file"
+        case "create_event": return "Add event"
+        case "create_reminder": return "Add reminder"
+        case "mail_draft": return "Email draft"
+        case "notes_create": return "New note"
+        case "schedule_task": return "Schedule"
+        default: return tool.hasPrefix("mcp__") ? (tool.components(separatedBy: "__").dropFirst().first ?? "Connector") : "Allow tool"
         }
     }
 

@@ -122,6 +122,17 @@ final class DesktopCompanion: NSObject {
         web?.load(URLRequest(url: Self.pageURL))
     }
 
+    /// Drop out of the notch onto the desktop (first launch, or after picking an avatar).
+    /// If the page is still loading, it happens as soon as it's ready.
+    func entrance() {
+        if !DesktopCompanion.enabled { setEnabled(true) }
+        guard ready else { pendingEntrance = true; return }
+        pendingEntrance = false
+        UserDefaults.standard.set(true, forKey: "desktop.introDone")
+        notch?.peekaboo(hold: 2.4)                                 // Puff pops out as he drops
+        js("dreamer.entrance(\(frame.width / 2))")
+    }
+
     func setEnabled(_ on: Bool) {
         DesktopCompanion.enabled = on
         on ? start() : stop()
@@ -226,6 +237,7 @@ final class DesktopCompanion: NSObject {
 
     private var lastVoicePhase: HandsFree.Phase = .off
     private var musicOn = false
+    private var pendingEntrance = false
     private var lastMood = ""
     private var wasBusy = false
     private var pointing = false
@@ -555,6 +567,14 @@ final class DesktopCompanion: NSObject {
                              approval: !backend.approvals.isEmpty, voice: handsFree?.isOn ?? false)
             }
             AppLog.write("desktop companion ready")
+            // First launch (or a freshly picked avatar): make an entrance.
+            if pendingEntrance || !UserDefaults.standard.bool(forKey: "desktop.introDone") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + (pendingEntrance ? 0.6 : 3.0)) { [weak self] in
+                    self?.pendingEntrance = false
+                    self?.ready = true
+                    self?.entrance()
+                }
+            }
         case "state":
             if let b = msg["box"] as? [String: Double] {
                 hitBox = NSRect(x: b["x"] ?? 0, y: b["y"] ?? 0, width: b["w"] ?? 0, height: b["h"] ?? 0)
@@ -573,7 +593,23 @@ final class DesktopCompanion: NSObject {
                 AppLog.write("desktop companion: close-up saved")
             }
         case "click":
-            if (msg["button"] as? Int) == 2 { showMenu() } else { showMenuBubble() }
+            if (msg["button"] as? Int) == 2 { showMenu(); break }
+            // Poked: the first click opens his menu; poke him fast and he gets dizzy.
+            if msg["reaction"] as? String == "dizzy" {
+                hideBubble()
+                SoundFX.play(.dizzy)
+            } else {
+                SoundFX.play(.boop)
+                showMenuBubble()
+            }
+        case "petted":
+            SoundFX.play(.love)
+        case "landed":
+            if msg["entrance"] as? Bool == true {
+                SoundFX.play(.yay)
+                let name = DesktopCompanion.avatarNames.first { $0.0 == DesktopCompanion.avatar }?.1 ?? "Ledge"
+                bubble("Hi! I'm \(name) 👋", sub: "Click me for a menu · drag me anywhere · double-click to talk", ttl: 7)
+            }
         case "dblclick":
             handsFree?.toggle()
             bubble(handsFree?.isOn == true ? "I'm listening…" : "Okay, going quiet", ttl: 3)

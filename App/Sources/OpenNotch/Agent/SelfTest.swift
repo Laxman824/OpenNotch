@@ -43,6 +43,10 @@ enum SelfTest {
             core.emit = { ev in
                 switch ev["type"] as? String ?? "" {
                 case "text": print(ev["delta"] as? String ?? "", terminator: ""); fflush(stdout)
+                case "thinking": print("\u{1B}[2m\(ev["delta"] as? String ?? "")\u{1B}[0m", terminator: ""); fflush(stdout)
+                case "plan":
+                    let items = ev["items"] as? [[String: String]] ?? []
+                    print("\n  [plan] " + items.map { "\($0["status"] == "completed" ? "✓" : $0["status"] == "in_progress" ? "→" : "○") \($0["content"] ?? "")" }.joined(separator: " | "))
                 case "tool": print("\n  [tool \(ev["state"] ?? "")] \(ev["verb"] ?? "") \(ev["detail"] ?? "")\(ev["error"].map { " — \($0)" } ?? "")")
                 case "approval":
                     print("\n  [approval requested: \(ev["tool"] ?? "") — auto-declined in self-test]")

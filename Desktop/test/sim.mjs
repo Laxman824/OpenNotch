@@ -348,5 +348,55 @@ console.log("talk: mouths open and close on all three avatars");
   console.log(`reactions: celebrate peak ${peak.toFixed(2)}, point ok, slept (walked ${walked.toFixed(1)}s), hover wakes`);
 }
 
+// ── 12. Pokes and petting ──────────────────────────────────────────────────
+{
+  const sim = createSim({ vw: W, vh: H, pace: "calm", walkOnly: true, post: () => {} });
+  sim.setWorld({ w: W, h: H, floor: FLOOR, ceil: CEIL });
+  const s = sim.s;
+  const dt = 1 / 30;
+  const run = (sec) => { for (let i = 0; i < sec * 30; i += 1) sim.step(dt); };
+  run(2);
+  check(sim.poke() === "annoyed", "poke: first click annoys");
+  run(0.6);
+  check(s.wAnnoy > 0.8, `poke: annoyed pose ${s.wAnnoy.toFixed(2)}`);
+  run(2);
+  check(s.wAnnoy < 0.1, "poke: annoyance passes");
+  sim.poke(); run(0.2); sim.poke(); run(0.2);
+  check(sim.poke() === "dizzy", "poke: three quick clicks = dizzy");
+  run(1);
+  check(s.wDizzy > 0.8, `dizzy pose ${s.wDizzy.toFixed(2)}`);
+  run(4);
+  check(s.wDizzy < 0.1, "dizzy passes");
+  let loved = false;
+  for (let i = 0; i < 12; i += 1) { loved = sim.petMove(500 + (i % 2 ? 30 : 0)) || loved; run(0.08); }
+  check(loved, "pet: back-and-forth strokes = love");
+  run(0.6);
+  check(s.wLove > 0.8, `love pose ${s.wLove.toFixed(2)}`);
+  check(!sim.petMove(531), "pet: no repeat trigger mid-love");
+  const nan = ![s.x, s.y, sim.rig.arms.L.sh.rotation.z, sim.rig.neck.rotation.y].every(Number.isFinite);
+  check(!nan, "pokes/pets: no NaN");
+  console.log(`pokes: annoyed → dizzy → love all trigger and fade`);
+}
+
+// ── 13. Entrance: drops out of the notch, lands, ta-da ─────────────────────
+{
+  const events = [];
+  const sim = createSim({ vw: W, vh: H, pace: "calm", walkOnly: true, post: (m) => events.push(m) });
+  sim.setWorld({ w: W, h: H, floor: FLOOR, ceil: CEIL });
+  const s = sim.s;
+  sim.entrance(W / 2);
+  check(s.mode === "fall" && s.y > H - 20, "entrance: starts falling from the top");
+  let landedAt = null;
+  for (let i = 0; i < 60 * 6 && landedAt === null; i += 1) {
+    sim.step(1 / 60);
+    if (events.some((e) => e.type === "landed" && e.entrance)) landedAt = i / 60;
+  }
+  check(landedAt !== null, "entrance: lands and reports it");
+  check(Math.abs(s.x - W / 2) < 200, `entrance: lands near the notch (x ${s.x.toFixed(0)})`);
+  for (let i = 0; i < 20; i += 1) sim.step(1 / 60);
+  check(s.wCeleb > 0.5, "entrance: ta-da on arrival");
+  console.log(`entrance: landed after ${landedAt === null ? "never" : landedAt.toFixed(2) + "s"} at x ${s.x.toFixed(0)}`);
+}
+
 console.log(failed === 0 ? "desktop dreamer: all checks pass" : `desktop dreamer: ${failed} FAILED`);
 process.exit(failed ? 1 : 0);

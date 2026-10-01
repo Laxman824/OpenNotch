@@ -69,19 +69,49 @@ struct AssistantFace: View {
     var size: CGFloat
     @ObservedObject var backend: Backend
     var tracksCursor = true
+    /// Wiggle-wave when it appears (peek-a-boo).
+    var greets = false
     @AppStorage("avatarPalette") private var paletteID = "aurora"
+    @AppStorage("character.style") private var style = "puff"
     @Environment(\.notchContentVisible) private var visible
+    @StateObject private var brain = CharacterBrain()
+    @ObservedObject private var policy = AnimationPolicy.shared
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: size < 24 ? 1.0 / 30 : 1.0 / 60, paused: !visible)) { ctx in
+        let fps: Double = policy.eco ? 20 : (size < 24 ? 30 : 60)
+        TimelineView(.animation(minimumInterval: 1.0 / fps, paused: !visible)) { ctx in
             let mood = currentMood(backend: backend, listening: backend.listening, now: ctx.date)
-            AvatarCanvas(size: size, mood: mood, palette: AvatarPalette.named(paletteID),
-                         t: ctx.date.timeIntervalSinceReferenceDate, level: backend.micLevel,
-                         gaze: tracksCursor ? Self.gaze() : .zero,
-                         speech: backend.voicePhase == .speaking ? backend.speechLevel : nil)
+            let gaze = tracksCursor ? Self.gaze() : .zero
+            if style == "robot" {
+                AvatarCanvas(size: size, mood: mood, palette: AvatarPalette.named(paletteID),
+                             t: ctx.date.timeIntervalSinceReferenceDate, level: backend.micLevel, gaze: gaze,
+                             speech: backend.voicePhase == .speaking ? backend.speechLevel : nil)
+            } else {
+                let _ = brain.step(ctx.date, doneAt: backend.lastDoneAt, dragging: ToolHost.notch?.fileDrag ?? false)
+                PuffCanvas(size: size, mood: mood, palette: AvatarPalette.named(paletteID),
+                           t: ctx.date.timeIntervalSinceReferenceDate, gaze: gaze,
+                           phys: PuffPhysics(squash: brain.squash, hop: brain.hop, sway: brain.sway,
+                                             eyeBoost: brain.eyeBoost, expression: brain.current,
+                                             hearts: brain.hearts.map { (ctx.date.timeIntervalSince($0.born), $0.x) }),
+                           speech: backend.voicePhase == .speaking ? backend.speechLevel : nil,
+                           level: backend.micLevel)
+            }
         }
         .frame(width: size, height: size)
-        .accessibilityLabel("Ledge")
+        .contentShape(Rectangle())
+        .onTapGesture { if style != "robot" { brain.poke() } }
+        .onContinuousHover { phase in
+            guard style != "robot" else { return }
+            switch phase {
+            case .active(let p): brain.hover(true); brain.pet(x: p.x)
+            case .ended: brain.hover(false)
+            }
+        }
+        .onAppear {
+            if greets { DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { brain.wave() } }
+        }
+        .accessibilityLabel(UserDefaults.standard.string(forKey: "assistantName") ?? "Ledge")
+        .accessibilityHint("Tap to poke")
     }
 
     /// Where the eyes look: toward the pointer, measured from the notch (the

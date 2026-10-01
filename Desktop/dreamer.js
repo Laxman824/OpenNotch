@@ -35,6 +35,9 @@ import {
   celebratePose,
   pointPose,
   sleepPose,
+  annoyedPose,
+  dizzyPose,
+  lovePose,
   danglePose,
 } from "./DreamerRig.js";
 
@@ -134,6 +137,34 @@ export function createSim({
   rig.root.scale.setScalar(px);
   rig.root.rotation.x = 0.32;
   scene.add(rig.root);
+
+  // Little floating effects on the head: dizzy stars and love hearts (sprites
+  // parented to the neck, so they follow him everywhere).
+  const glyphTexture = (glyph, color) => {
+    const c = document.createElement("canvas");
+    c.width = 64;
+    c.height = 64;
+    const g = c.getContext("2d");
+    g.font = "52px -apple-system, sans-serif";
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillStyle = color;
+    g.fillText(glyph, 32, 36);
+    return new THREE.CanvasTexture(c);
+  };
+  const makeSprites = (glyph, color, n) => {
+    const mat = new THREE.SpriteMaterial({ map: glyphTexture(glyph, color), transparent: true, depthTest: false });
+    return Array.from({ length: n }, () => {
+      const sp = new THREE.Sprite(mat);
+      sp.scale.setScalar(0.09);
+      sp.visible = false;
+      sp.renderOrder = 10;
+      rig.neck.add(sp);
+      return sp;
+    });
+  };
+  const stars = makeSprites("★", "#ffd84a", 3);
+  const hearts = makeSprites("♥", "#ff6f9a", 3);
 
   const shadow = new THREE.Mesh(
     new THREE.CircleGeometry(1, 32),
@@ -249,6 +280,17 @@ export function createSim({
     sleepy: false, // late at night with nothing going on: he dozes
     wakeUntil: 0,
     wSleep: 0,
+    pokes: [], // recent click times
+    annoyUntil: 0,
+    dizzyUntil: 0,
+    loveUntil: 0,
+    wAnnoy: 0,
+    wDizzy: 0,
+    wLove: 0,
+    petX: null,
+    petDir: 0,
+    petTurns: [],
+    entering: false, // first appearance: dropping out of the notch
     talkV: 0,
   };
 
@@ -560,8 +602,14 @@ export function createSim({
           s.vy = 0;
           s.vx = 0;
           s.dip = clamp(0.08 + impact / 7000, 0.08, 0.2); // knees absorb it
-          post({ type: "landed" });
-          setMode("idle", rand(2, 4));
+          post({ type: "landed", entrance: s.entering });
+          if (s.entering) {
+            // Ta-da: arms up on arrival, then stay put a moment to say hi.
+            s.entering = false;
+            s.react = "celebrate";
+            s.reactK = 0;
+            setMode("idle", 6);
+          } else setMode("idle", rand(2, 4));
         }
       }
     } else if (s.mode === "idle" || s.mode === "walk") {
@@ -788,7 +836,8 @@ export function createSim({
     s.look = ease(s.look, s.lookTarget, 3, dt);
     s.lookUp = ease(s.lookUp, walkOnly && s.attending ? 1 : 0, 3, dt);
     s.waveT = s.hover ? s.waveT + dt : 0;
-    const facing = s.hover || s.mode === "held" || s.wDance > 0.5 || s.wCeleb > 0.5 || s.wPoint > 0.5;
+    const facing = s.hover || s.mode === "held" || s.wDance > 0.5 || s.wCeleb > 0.5 || s.wPoint > 0.5
+      || s.wDizzy > 0.5 || s.wLove > 0.5 || s.wAnnoy > 0.5;
     if (facing) s.lookTarget = 0;
     const yawTarget = facing ? 0 : s.dir * (s.mode === "idle" ? 0.75 : 1.15 - 0.35 * Math.max(s.wFly, s.wArms));
     s.yaw = ease(s.yaw, yawTarget, 4, dt);
@@ -802,7 +851,7 @@ export function createSim({
     // Dance on the beat while music plays and he's standing about.
     s.beat += dt * 2 * Math.PI * (s.bpm / 60);
     const dancing = s.music && s.mode === "idle" && !s.hover && !s.attending && s.wWave < 0.05
-      && !s.sleepy && !s.react;
+      && !s.sleepy && !s.react && s.t > s.dizzyUntil && s.t > s.annoyUntil && s.t > s.loveUntil;
     s.wDance = ease(s.wDance, dancing ? 1 : 0, 3, dt);
     if (s.wDance > 0.001) {
       const bar = Math.floor(s.beat / (2 * Math.PI) / 8); // new move every 8 beats
@@ -826,6 +875,27 @@ export function createSim({
     if (s.wSleep > 0.001) mixInto(P, sleepPose({ t: s.t }), s.wSleep);
     if (s.wPoint > 0.001) mixInto(P, pointPose({ t: s.t }), s.wPoint);
     if (s.wCeleb > 0.001) mixInto(P, celebratePose({ t: s.t, k: s.reactK }), s.wCeleb);
+    // Pokes and petting.
+    const standing = s.mode === "idle" || s.mode === "walk";
+    s.wAnnoy = ease(s.wAnnoy, standing && s.t < s.annoyUntil ? 1 : 0, 8, dt);
+    s.wDizzy = ease(s.wDizzy, standing && s.t < s.dizzyUntil ? 1 : 0, 5, dt);
+    s.wLove = ease(s.wLove, standing && s.t < s.loveUntil ? 1 : 0, 6, dt);
+    if (s.wAnnoy > 0.001) mixInto(P, annoyedPose({ t: s.t }), s.wAnnoy);
+    if (s.wDizzy > 0.001) mixInto(P, dizzyPose({ t: s.t }), s.wDizzy);
+    if (s.wLove > 0.001) mixInto(P, lovePose({ t: s.t }), s.wLove);
+    stars.forEach((sp, i) => {
+      sp.visible = s.wDizzy > 0.05;
+      const a = s.t * 4 + (i * Math.PI * 2) / 3;
+      sp.position.set(Math.cos(a) * 0.2, 0.46 + 0.03 * Math.sin(a * 2), Math.sin(a) * 0.2);
+      sp.material.opacity = s.wDizzy;
+    });
+    hearts.forEach((sp, i) => {
+      const k = ((s.t * 0.7 + i / 3) % 1);
+      sp.visible = s.wLove > 0.05;
+      sp.position.set((i - 1) * 0.12 + 0.03 * Math.sin(s.t * 5 + i), 0.36 + k * 0.32, 0.05);
+      sp.scale.setScalar(0.07 + 0.04 * k);
+      sp.material.opacity = s.wLove * (1 - k);
+    });
     // Follow-through: legs trail the swing and the torso counters it a little,
     // so the body bends like a body rather than rotating as one stiff piece.
     const lag = clamp(s.swingV, -2, 2) * s.wDangle;
@@ -953,6 +1023,63 @@ export function createSim({
     setHover(on) {
       s.hover = !!on && (s.mode === "idle" || s.mode === "walk");
       if (on) wake();
+    },
+    /** First appearance: drop out of the notch (x = notch centre, overlay points). */
+    entrance(x) {
+      wake();
+      s.perch = null;
+      s.hover = false;
+      s.x = clamp(+x || vw / 2, 40, vw - 40);
+      s.y = vh - 4; // feet at the top edge: he slides out from behind the notch
+      s.vx = (Math.random() < 0.5 ? -1 : 1) * 40;
+      s.vy = -60;
+      s.sqV -= 0.5; // stretched as he drops
+      s.bounces = 0;
+      s.entering = true;
+      setMode("fall");
+    },
+    /** A click on him. Returns "annoyed" or "dizzy" (3 within 1.6 s). */
+    poke() {
+      wake();
+      s.pokes = s.pokes.filter((p) => s.t - p < 1.6).concat(s.t);
+      s.sqV -= 0.3; // squish
+      if (s.mode === "walk") setMode("idle", 3);
+      if (s.pokes.length >= 3) {
+        s.pokes = [];
+        s.dizzyUntil = s.t + 3.2;
+        s.annoyUntil = 0;
+        return "dizzy";
+      }
+      if (s.t < s.dizzyUntil) return "dizzy";
+      s.annoyUntil = s.t + 1.3;
+      return "annoyed";
+    },
+    /** Pointer moving over him: back-and-forth strokes (4 turns in 1.6 s) = petting. */
+    petMove(x) {
+      if (s.petX !== null) {
+        const dir = x > s.petX + 2 ? 1 : x < s.petX - 2 ? -1 : 0;
+        if (dir && dir !== s.petDir) {
+          if (s.petDir) s.petTurns.push(s.t);
+          s.petDir = dir;
+        }
+      }
+      s.petX = x;
+      s.petTurns = s.petTurns.filter((p) => s.t - p < 1.6);
+      if (s.petTurns.length >= 4) {
+        s.petTurns = [];
+        const was = s.t < s.loveUntil;
+        s.loveUntil = s.t + 2.6;
+        s.annoyUntil = 0;
+        wake();
+        if (s.mode === "walk") setMode("idle", 4);
+        return !was;
+      }
+      return false;
+    },
+    petEnd() {
+      s.petX = null;
+      s.petDir = 0;
+      s.petTurns = [];
     },
     /** "celebrate" (a couple of seconds), "point" (until cleared) or null. */
     react(kind) {
@@ -1157,7 +1284,12 @@ export function mount(host) {
     press = { x: e.clientX, y: e.clientY, dragging: false };
   });
   window.addEventListener("pointermove", (e) => {
-    if (!press) return;
+    if (!press) {
+      if (inBox(e)) {
+        if (sim.petMove(e.clientX)) post({ type: "petted" });
+      } else sim.petEnd();
+      return;
+    }
     if (!press.dragging && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
       press.dragging = true;
       dragging = true;
@@ -1188,7 +1320,8 @@ export function mount(host) {
     } else {
       clickTimer = setTimeout(() => {
         clickTimer = 0;
-        post({ type: "click", button: 0, mode: sim.s.mode });
+        const reaction = sim.poke();
+        post({ type: "click", button: 0, mode: sim.s.mode, reaction });
       }, 260);
     }
   });
@@ -1367,7 +1500,8 @@ export function mount(host) {
     const settling = Math.abs(s.swing) > 0.01 || Math.abs(s.swingV) > 0.05 || Math.abs(s.sq) > 0.005;
     let fps = dragging || settling || s.mode === "fall" || s.wWave > 0.05 || s.wDangle > 0.05 ? 60
       : s.mode === "walk" || Math.abs(s.vx) > 2 || s.mode === "held" || s.talkV > 0.02 || s.talk > 0
-        || s.wDance > 0.02 || s.wCeleb > 0.02 || s.wPoint > 0.02 ? 30 : 15;
+        || s.wDance > 0.02 || s.wCeleb > 0.02 || s.wPoint > 0.02
+        || s.wAnnoy > 0.02 || s.wDizzy > 0.02 || s.wLove > 0.02 ? 30 : 15;
     // Energy saver (on battery): one notch down, except while you're dragging him.
     if (eco && !dragging) fps = fps >= 60 ? 30 : fps >= 30 ? 15 : 10;
     frameCamera(s);
@@ -1408,6 +1542,12 @@ export function mount(host) {
     setMusic: (on, bpm) => sim.setMusic(on, bpm),
     react: (k) => sim.react(k),
     setSleepy: (on) => sim.setSleepy(on),
+    entrance: (x) => {
+      sim.entrance(x);
+      clearTimeout(timer);
+      cancelAnimationFrame(raf);
+      schedule(60);
+    },
     setEco: (on) => {
       eco = !!on;
     },

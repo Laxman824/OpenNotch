@@ -10,12 +10,27 @@ struct Item: Identifiable, Equatable {
         case tool(state: String, icon: String, verb: String, detail: String, error: String?)
         case info
         case error
+        /// The model's reasoning, streamed live, then folded away.
+        case thinking
+        /// The agent's current plan (todo_write), updated in place.
+        case plan([PlanStep])
     }
     let id: String
     var kind: Kind
     var text: String
     var streaming = false
     var meta: String? = nil          // "3.2s · 4 tools · 1.2k tokens" under an answer
+    var details: String? = nil       // tool rows: what was sent / what came back
+    var started: Date? = nil         // thinking rows: when it began
+}
+
+extension Item {
+    var isPlan: Bool { if case .plan(_) = kind { return true } else { return false } }
+}
+
+struct PlanStep: Equatable {
+    let content: String
+    let status: String               // pending | in_progress | completed
 }
 
 struct NowPlaying: Equatable {
@@ -90,6 +105,8 @@ struct Approval: Identifiable, Equatable {
     let id: String
     let tool: String
     let preview: String
+    /// What hands-free says out loud ("I need your OK to run a command: …").
+    var spoken: String = ""
 }
 
 /// The UI's view of the assistant: transcript, busy state, approvals,
@@ -107,6 +124,10 @@ final class Backend: ObservableObject {
     @Published var lastAnswer: String = ""
     @Published var attachments: [Attachment] = []
     @Published var turnStarted: Date? = nil
+    /// (done, total) of the current plan while a turn runs — the closed notch shows "Step 2/5".
+    @Published var planProgress: (done: Int, total: Int)? = nil
+    /// True while the model is reasoning (before it answers or calls a tool).
+    @Published var thinkingNow = false
     // For the avatar's moods.
     var lastTextAt: Date? = nil
     var lastDoneAt: Date? = nil
@@ -336,6 +357,12 @@ final class Backend: ObservableObject {
     }
 
     func stop() { core.stop() }
+
+    // Chat history
+    func chats(matching q: String = "") -> [SessionStore.Summary] { core.chats(matching: q) }
+    var currentChatID: String? { core.currentChatID }
+    func openChat(_ id: String) { core.openChat(id) }
+    func deleteChat(_ id: String) { core.deleteChat(id) }
     func newChat() { core.newChat() }
 
     func answer(_ approval: Approval, allow: Bool) {
@@ -356,10 +383,35 @@ final class Backend: ObservableObject {
         case "status":
             applyStatus(ev)
         case "user":
+            planProgress = nil
             let injected = ev["injected"] as? Bool ?? false
             add(.user, (injected ? "↪ " : "") + (ev["text"] as? String ?? ""))
             if !injected { turnHadText = false; lastTool = ""; turnStarted = Date() }
+        case "thinking":
+            let delta = ev["delta"] as? String ?? ""
+            thinkingNow = true
+            if let i = items.indices.last, items[i].kind == .thinking, items[i].streaming {
+                items[i].text += delta
+            } else {
+                closeStreaming()
+                counter += 1
+                items.append(Item(id: "i\(counter)", kind: .thinking, text: delta, streaming: true, started: Date()))
+            }
+        case "plan":
+            let steps = (ev["items"] as? [[String: Any]] ?? []).map {
+                PlanStep(content: $0["content"] as? String ?? "", status: $0["status"] as? String ?? "pending")
+            }
+            closeThinking()
+            let turnStart = items.lastIndex { $0.kind == .user } ?? -1
+            if let i = items.indices.last(where: { $0 > turnStart && items[$0].isPlan }) {
+                items[i].kind = .plan(steps)
+            } else {
+                counter += 1
+                items.append(Item(id: "i\(counter)", kind: .plan(steps), text: ""))
+            }
+            planProgress = steps.isEmpty ? nil : (steps.filter { $0.status == "completed" }.count, steps.count)
         case "text":
+            closeThinking()
             let delta = ev["delta"] as? String ?? ""
             turnHadText = true
             lastTextAt = Date()
@@ -375,21 +427,28 @@ final class Backend: ObservableObject {
             let verb = ev["verb"] as? String ?? ""
             let kind = Item.Kind.tool(state: state, icon: ev["icon"] as? String ?? "◆", verb: verb,
                                       detail: ev["detail"] as? String ?? "", error: ev["error"] as? String)
+            closeThinking()
             closeStreaming()
+            var details = ""
+            if let a = ev["args"] as? String, !a.isEmpty { details += a }
+            if let r = ev["result"] as? String, !r.isEmpty { details += (details.isEmpty ? "" : "\n───\n") + r }
             if let i = items.firstIndex(where: { $0.id == id }) {
                 items[i].kind = kind
+                if !details.isEmpty { items[i].details = details }
             } else {
-                items.append(Item(id: id, kind: kind, text: ""))
+                items.append(Item(id: id, kind: kind, text: "", details: details.isEmpty ? nil : details))
             }
             lastTool = state == "running" ? verb : ""
             if state == "running" { onToolStarted?(verb.isEmpty ? (ev["detail"] as? String ?? "") : verb) }
         case "approval":
             approvals.append(Approval(id: ev["id"] as? String ?? "", tool: ev["tool"] as? String ?? "",
-                                      preview: ev["preview"] as? String ?? ""))
+                                      preview: ev["preview"] as? String ?? "", spoken: ev["spoken"] as? String ?? ""))
             onApproval?()
         case "approval_done":
             approvals.removeAll { $0.id == ev["id"] as? String }
         case "done":
+            closeThinking()
+            planProgress = nil
             closeStreaming()
             let text = ev["text"] as? String ?? ""
             // The loop returns provider failures as the answer text, e.g.
@@ -433,6 +492,12 @@ final class Backend: ObservableObject {
         case "cleared":
             items = []
             approvals = []
+            planProgress = nil
+        case "reload":                                    // another chat was opened
+            items = []
+            approvals = []
+            planProgress = nil
+            for h in core.history { add(h.role == "user" ? .user : .assistant, h.text) }
         default:
             break
         }
@@ -448,6 +513,15 @@ final class Backend: ObservableObject {
             parts.append(k >= 1000 ? String(format: "%.1fk tokens", k / 1000) : "\(tin + tout) tokens")
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// The model moved on from reasoning: fold the thinking row into "Thought for 6s".
+    private func closeThinking() {
+        thinkingNow = false
+        guard let i = items.indices.last, items[i].kind == .thinking, items[i].streaming else { return }
+        items[i].streaming = false
+        let secs = max(1, Int(Date().timeIntervalSince(items[i].started ?? Date()).rounded()))
+        items[i].meta = "Thought for \(secs)s"
     }
 
     private func closeStreaming() {

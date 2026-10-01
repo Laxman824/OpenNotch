@@ -197,17 +197,22 @@ final class MemoryStore: @unchecked Sendable {
 final class PlanStore: @unchecked Sendable {
     static let shared = PlanStore()
     private let lock = NSLock()
-    private var items: [(content: String, status: String)] = []
+    private var items_: [(content: String, status: String)] = []
 
     func set(_ new: [(String, String)]) {
-        lock.lock(); items = new.map { ($0.0, $0.1) }; lock.unlock()
+        lock.lock(); items_ = new.map { ($0.0, $0.1) }; lock.unlock()
     }
 
     func clear() { set([]) }
 
+    var items: [(content: String, status: String)] {
+        lock.lock(); defer { lock.unlock() }
+        return items_
+    }
+
     func render() -> String {
         lock.lock(); defer { lock.unlock() }
-        return items.map { i in
+        return items_.map { i in
             let box = i.status == "completed" ? "[x]" : i.status == "in_progress" ? "[→]" : "[ ]"
             return "\(box) \(i.content)"
         }.joined(separator: "\n")

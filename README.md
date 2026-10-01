@@ -21,10 +21,14 @@ Open **Settings › AI** (notch menu › Settings…) and pick one:
 | **Apple on-device** | macOS 26 with Apple Intelligence turned on — no setup, offline |
 | Sign in with ChatGPT | Coming once OpenAI issues OpenNotch its client ID |
 
-The assistant can read and edit files, run shell commands, search and read the web, open apps and
-links, control music, look at your screen, check your calendar, add events and reminders, set timers,
-keep notes, remember preferences and plan multi-step work. **Anything risky — shell commands, file
-changes, calendar edits — shows an Approve button first.**
+The assistant helps with everyday work using the apps you already have: **summarise the page you're
+reading**, **catch up on your Mail inbox and draft replies** (it never sends), search and create
+**Apple Notes**, look up **contacts**, plan your day from your **calendar, reminders and the weather**,
+and **schedule prompts** ("every weekday at 9, brief me"). It also reads and edits files, runs shell
+commands, searches the web, controls music, looks at your screen, sets timers and remembers your
+preferences. You can watch it **think** and follow its **plan** live, and every chat is kept in
+**history** (⌘Y). **Anything risky — commands, file changes, calendar edits, drafts — waits for your
+OK**: the notch glows yellow and chimes, and in hands-free mode it asks out loud ("say yes or no").
 
 ### Connectors (MCP)
 
@@ -34,10 +38,21 @@ approval unless you list them under `"autoApprove"`.
 
 ## Features
 
+![Puff, the notch character, in every mood](docs/images/puff.png)
+
 - **Ask from the notch** — streaming answers, Markdown, one-tap suggestions for anything you drop on it, and a ⌘K command palette.
 - **Hands-free voice** — talk, hear the answer, interrupt any time. Speech recognition runs on device.
 - **Live activities** — album art and a Siri-style wave for music (with a hover player and scrubbing), progress rings for timers, and quick pop-ups for volume, AirPods, charging, keep-awake and system health.
-- **Ledge, the desktop companion** — a 3D character who walks on your windows, dances to your music, points at the notch when the assistant needs your OK, and dozes late at night. Three looks to pick from.
+- **Puff, the notch character** — a soft jelly blob with big glossy eyes and a sprout. Its eyes follow
+  your cursor; poke it and it gets grumpy, poke it three times and it goes dizzy, stroke it and hearts
+  float up. It hops for joy when a task finishes, gasps when you drag a file over, and now and then
+  peeks out of the notch to say hi. Tiny sounds are synthesised in-app (Settings › General to mute).
+- **Hidden menu bar icons** — the notch's "Menu bar" tab lists every menu bar icon, including the
+  ones the notch hides, and opens them for you.
+- **Mic & camera indicator** — the notch names the app using your microphone ("🎙 Zoom") and shows
+  when the camera is on.
+- **Ledge, the desktop companion** — picks are made on first launch, and your companion jumps out of
+  the notch and lands on your desktop. — a 3D character who walks on your windows, dances to your music, points at the notch when the assistant needs your OK, and dozes late at night. Three looks to pick from.
 - **Modules** — find files, clipboard history, shelf, notes, timers, calendar & reminders, music, system stats, screen time, image converter, AI-usage heatmap, screenshots with annotation, camera mirror.
 - **Private by design** — no account, no telemetry. Chats live in `~/Library/Application Support/OpenNotch`.
 
@@ -73,7 +88,7 @@ OPENNOTCH_KEY=… App/.build/debug/OpenNotch --selftest groq        # or openai,
 ```bash
 cli/opennotch "what's on my calendar?"     # ask
 git diff | cli/opennotch "review this"     # pipe context in
-cli/opennotch -t 25   ·   cli/opennotch --awake 60   ·   cli/opennotch -m mirror
+cli/opennotch -t 25   ·   cli/opennotch --awake 60   ·   cli/opennotch -m mirror   ·   cli/opennotch -m peek
 ```
 
 ## Contributing

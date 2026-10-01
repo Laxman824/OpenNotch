@@ -40,6 +40,8 @@ struct ToolSpec: Sendable {
 
 enum ProviderEvent: Sendable {
     case text(String)
+    /// The model's visible reasoning (Claude's summarized thinking, `reasoning` fields).
+    case thinking(String)
     case toolCall(ToolCall)
     case usage(input: Int, output: Int)
     /// Complete provider content for the assistant turn (see ChatMessage.raw).

@@ -672,14 +672,14 @@ enum ToolKit {
             schema: #"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["content","status"]}}},"required":["items"]}"#,
             risk: .read, verb: "Planning", detail: { "\($0.array("items").count) steps" }, preview: { _ in "" },
             run: { a in
-                let items = a.array("items").compactMap { i -> (String, String)? in
+                var items = a.array("items").compactMap { i -> (String, String)? in
                     guard let c = i["content"] as? String else { return nil }
                     return (c, i["status"] as? String ?? "pending")
                 }
                 let active = items.filter { $0.1 == "in_progress" }.count
-                if !items.isEmpty && active != 1 && !items.allSatisfy({ $0.1 == "completed" }) {
-                    return .fail("Exactly one item must be in_progress (found \(active)).")
-                }
+                if active > 1 { return .fail("Only one item can be in_progress (found \(active)).") }
+                // None in progress yet: the first pending step is the one being worked on.
+                if active == 0, let i = items.firstIndex(where: { $0.1 == "pending" }) { items[i].1 = "in_progress" }
                 PlanStore.shared.set(items)
                 return ToolOutcome(ok: true, text: PlanStore.shared.render())
             }),

@@ -306,12 +306,12 @@ struct AwakeEars: View {
         if side {
             TimelineView(.periodic(from: .now, by: 20)) { ctx in
                 Text(HealthLogic.awakeLabel(until: awake.until, now: ctx.date))
-                    .font(.system(size: 11, weight: .bold, design: .rounded)).monospacedDigit()
+                    .font(.system(size: 13, weight: .bold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.45))
             }
         } else {
             Image(systemName: "cup.and.saucer.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(LinearGradient(colors: [Color(red: 1.0, green: 0.8, blue: 0.5), Color(red: 0.95, green: 0.55, blue: 0.3)],
                                                 startPoint: .top, endPoint: .bottom))
                 .symbolEffect(.pulse, options: .repeating.speed(0.3))

@@ -1,5 +1,6 @@
 import ApplicationServices
 import AVFoundation
+import Contacts
 import EventKit
 import Security
 import Speech
@@ -15,6 +16,8 @@ enum Prefs {
     static let hudVolume = "hud.volume", hudDevice = "hud.device", hudPower = "hud.power"
     static let playerHover = "player.hover"
     static let hudHealth = "hud.health"
+    static let hudPrivacy = "hud.privacy"
+    static let characterSounds = "character.sounds", characterPeek = "character.peek"
     static let desktopDance = "desktop.dance", desktopReactions = "desktop.reactions", desktopSleep = "desktop.sleep"
     static let energySaver = "energy.saver"
     static let onboardingDone = "onboarding.done"
@@ -160,6 +163,7 @@ final class SettingsModel: ObservableObject {
         let speech = SFSpeechRecognizer.authorizationStatus()
         let cal = EKEventStore.authorizationStatus(for: .event)
         let rem = EKEventStore.authorizationStatus(for: .reminder)
+        let contacts = CNContactStore.authorizationStatus(for: .contacts)
         rows = [
             PermissionRow(id: "mic", icon: "mic.fill", title: "Microphone", why: "Hands-free and dictation",
                           state: Self.state(mic == .authorized, asked: mic != .notDetermined)) {
@@ -186,6 +190,12 @@ final class SettingsModel: ObservableObject {
                           state: Self.state(rem == .fullAccess, asked: rem != .notDetermined)) {
                 if rem == .notDetermined { EKEventStore().requestFullAccessToReminders { _, _ in } }
                 else { Self.openPane("Privacy_Reminders") }
+            },
+            PermissionRow(id: "contacts", icon: "person.crop.circle", title: "Contacts",
+                          why: "“What's Priya's email?” — looked up only when you ask",
+                          state: Self.state(contacts == .authorized, asked: contacts != .notDetermined)) {
+                if contacts == .notDetermined { CNContactStore().requestAccess(for: .contacts) { _, _ in } }
+                else { Self.openPane("Privacy_Contacts") }
             },
             PermissionRow(id: "screen", icon: "rectangle.dashed.badge.record", title: "Screen Recording",
                           why: "Captures and “explain my screen”",
@@ -343,6 +353,7 @@ private struct PrefToggle: View {
 private struct GeneralPane: View {
     @AppStorage("assistantName") private var name = "Ledge"
     @AppStorage("avatarPalette") private var palette = "aurora"
+    @AppStorage("character.style") private var characterStyle = "puff"
     @AppStorage("handsfree.autostart") private var handsFreeAtLaunch = false
     @ObservedObject private var policy = AnimationPolicy.shared
 
@@ -358,6 +369,17 @@ private struct GeneralPane: View {
                     }
             }
             HStack {
+                Text("Notch character").font(.system(size: 12.5, weight: .medium))
+                Spacer()
+                Picker("", selection: $characterStyle) {
+                    Text("Puff (soft blob)").tag("puff")
+                    Text("Robot").tag("robot")
+                }
+                .labelsHidden().frame(width: 180)
+            }
+            PrefToggle("Character sounds", Prefs.characterSounds, sub: "Tiny boops when you poke, pet or celebrate")
+            PrefToggle("Peek out of the notch", Prefs.characterPeek, sub: "Now and then Puff pops out to say hi while you work")
+            HStack {
                 Text("Notch face colours").font(.system(size: 12.5, weight: .medium))
                 Spacer()
                 Picker("", selection: $palette) {
@@ -367,6 +389,15 @@ private struct GeneralPane: View {
             }
             Toggle("Start hands-free at launch", isOn: $handsFreeAtLaunch).toggleStyle(.switch).controlSize(.small)
                 .font(.system(size: 12.5, weight: .medium))
+        }
+        Section(title: "Appearance") {
+            if #available(macOS 26.0, *) {
+                PrefToggle("Liquid Glass", "appearance.glass",
+                           sub: "The open notch uses macOS 26's glass, tinted dark so text stays easy to read")
+            } else {
+                Text("Liquid Glass needs macOS 26 — this Mac uses the classic dark look.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+            }
         }
         Section(title: "Motion & energy") {
             PrefToggle("Save energy on battery", Prefs.energySaver,
@@ -392,6 +423,8 @@ private struct NotchPane: View {
             PrefToggle("Volume", Prefs.hudVolume)
             PrefToggle("Headphones & speakers", Prefs.hudDevice, sub: "With AirPods battery when connected")
             PrefToggle("Charging & low battery", Prefs.hudPower)
+            PrefToggle("Microphone & camera indicator", Prefs.hudPrivacy,
+                       sub: "Shows which app is using your mic, and when the camera is on")
             PrefToggle("Health alerts", Prefs.hudHealth, sub: "Sustained CPU load, memory pressure, heat, low disk — at most every 30 min each")
         }
         Section(title: "Setup") {
@@ -480,6 +513,7 @@ private struct PermissionsPane: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
+        if model.welcome { CompanionPicker() }
         if model.adHocSigned {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
@@ -770,5 +804,57 @@ private struct AIPane: View {
             trailing()
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+
+/// First run: choose who walks your desktop and who lives in the notch.
+/// Picking a desktop companion makes it jump out of the notch right away.
+private struct CompanionPicker: View {
+    @State private var avatar = DesktopCompanion.avatar
+    @AppStorage("character.style") private var notchStyle = "puff"
+    private let looks: [(id: String, name: String, icon: String, tint: Color, line: String)] = [
+        ("ledge", "Ledge", "figure.wave", Color(red: 0.72, green: 0.64, blue: 1.0), "Hoodie, big grin"),
+        ("bee", "Bee", "ladybug.fill", Color(red: 1.0, green: 0.62, blue: 0.2), "Wings and antennae"),
+        ("cat", "Cat", "cat.fill", Color(red: 0.55, green: 0.95, blue: 0.5), "Hood up, cat-eye glasses"),
+    ]
+
+    var body: some View {
+        Section(title: "Meet your companions") {
+            Text("Pick who walks your desktop — they'll hop out of the notch to say hi.")
+                .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+            HStack(spacing: 12) {
+                ForEach(looks, id: \.id) { l in
+                    Button {
+                        avatar = l.id
+                        let app = NSApp.delegate as? AppDelegate
+                        if l.id != DesktopCompanion.avatar || !DesktopCompanion.enabled { app?.desktop.setAvatar(l.id) }
+                        app?.desktop.entrance()
+                    } label: {
+                        VStack(spacing: 6) {
+                            Image(systemName: l.icon).font(.system(size: 28)).foregroundStyle(l.tint)
+                            Text(l.name).font(.system(size: 12.5, weight: .bold))
+                            Text(l.line).font(.system(size: 10)).foregroundStyle(Theme.secondary)
+                        }
+                        .frame(width: 128, height: 96)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(avatar == l.id ? l.tint.opacity(0.2) : Color.white.opacity(0.04)))
+                        .overlay(RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(avatar == l.id ? l.tint : Theme.hairline, lineWidth: avatar == l.id ? 2 : 1))
+                    }
+                    .buttonStyle(HoverLift())
+                    .accessibilityLabel("\(l.name) desktop companion")
+                    .accessibilityAddTraits(avatar == l.id ? .isSelected : [])
+                }
+            }
+            HStack {
+                Text("In the notch").font(.system(size: 12.5, weight: .medium))
+                Spacer()
+                Picker("", selection: $notchStyle) {
+                    Text("Puff (soft blob)").tag("puff")
+                    Text("Robot").tag("robot")
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+            }
+        }
     }
 }

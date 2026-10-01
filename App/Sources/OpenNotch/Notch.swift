@@ -11,7 +11,7 @@ final class NotchPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-enum NotchMode { case collapsed, hello, peek, alert, player, mirror, expanded }
+enum NotchMode { case collapsed, hello, peek, alert, player, mirror, peekaboo, expanded }
 
 /// One place for every notch motion, so open/close/peek feel like one system.
 /// Open overshoots a touch and settles (the "drop"); close is quicker and
@@ -53,6 +53,7 @@ final class NotchController: ObservableObject {
     @Published var alert: NotchAlert?      // what .alert mode is showing
     @Published var fileDrag = false        // a file is being dragged over the notch
     @Published var showPalette = false     // ⌘K command palette over the open notch
+    @Published var showHistory = false     // ⌘Y chat history over the open notch
     let camera = CameraIO()
     /// The expanded panel is built once, shortly after launch, and kept.
     @Published var panelWarm = false
@@ -136,10 +137,13 @@ final class NotchController: ObservableObject {
     var hasLiveActivity: Bool {
         hud != nil || (backend?.busy ?? false) || !(backend?.approvals.isEmpty ?? true)
             || (handsFree?.isOn ?? false) || hub?.timers.kind != nil
-            || (backend?.nowPlaying.playing ?? false) || KeepAwake.shared.isOn
+            || (backend?.nowPlaying.playing ?? false) || KeepAwake.shared.isOn || privacy.active
     }
 
-    enum EarActivity { case hud, agent, timer, music, awake, none }
+    enum EarActivity { case hud, agent, timer, music, privacy, awake, none }
+
+    /// Apps using the microphone / camera right now (PrivacyMonitor).
+    @Published var privacy = PrivacyState()
 
     /// A short system pop-up (volume, headphones, power) — outranks everything
     /// for its ~1.6 s.
@@ -169,6 +173,7 @@ final class NotchController: ObservableObject {
         if (backend?.busy ?? false) || !(backend?.approvals.isEmpty ?? true) || (handsFree?.isOn ?? false) { return .agent }
         if hub?.timers.kind != nil { return .timer }
         if backend?.nowPlaying.playing ?? false { return .music }
+        if privacy.active { return .privacy }
         if KeepAwake.shared.isOn { return .awake }
         return .none
     }
@@ -177,11 +182,12 @@ final class NotchController: ObservableObject {
     var earWidth: CGFloat {
         switch earActivity {
         case .music: return 112
-        case .timer: return 74
+        case .timer: return 82
         case .hud:
             if case .health = hud { return 132 }
             return 100
-        case .awake: return 58
+        case .awake: return 62
+        case .privacy: return 104
         default: return 65
         }
     }
@@ -193,6 +199,7 @@ final class NotchController: ObservableObject {
         case .peek: return peekSize
         case .player: return CGSize(width: max(notchSize.width + 2 * 112, 440), height: notchSize.height + 124)
         case .mirror: return CGSize(width: 380, height: notchSize.height + 250)
+        case .peekaboo: return CGSize(width: notchSize.width + 20, height: notchSize.height + 64)
         case .alert: return CGSize(width: max(notchSize.width + 280, 480), height: notchSize.height + 64)
         case .expanded: return expandedSize
         }
@@ -212,7 +219,7 @@ final class NotchController: ObservableObject {
         // Accessibility permission.
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.mode == .expanded || self.mode == .player || self.mode == .mirror,
+                guard let self, [.expanded, .player, .mirror, .peekaboo].contains(self.mode),
                       self.backend?.approvals.isEmpty ?? true else { return }
                 self.collapse()
             }
@@ -248,6 +255,7 @@ final class NotchController: ObservableObject {
             fileDrag = false
         }
 
+        if mode == .collapsed && !over { maybePeek() }
         switch mode {
         case .collapsed, .peek, .hello, .alert:
             // Dwell before opening, so sweeping to the menu bar doesn't trigger it.
@@ -267,6 +275,9 @@ final class NotchController: ObservableObject {
                 // Music in the ears: drop out the compact player, not the whole panel.
                 if mode == .collapsed && earActivity == .music && !dragging && Prefs.on(Prefs.playerHover) { openPlayer() } else { expand(pinned: false) }
             }
+        case .peekaboo:
+            if over { peekabooUntil = max(peekabooUntil, Date().addingTimeInterval(1.5)) }
+            else if Date() > peekabooUntil { withAnimation(Motion.close) { mode = .collapsed } }
         case .player, .mirror:
             if over || pressed || Date() < playerHoldUntil {
                 leftAt = nil
@@ -289,6 +300,27 @@ final class NotchController: ObservableObject {
     }
 
     private var playerHoldUntil = Date.distantPast
+    private var peekabooUntil = Date.distantPast
+    private var nextPeek = Date().addingTimeInterval(150)
+
+    /// Puff pops out of the notch, looks around, and slips back in.
+    func peekaboo(hold: TimeInterval = 3.6) {
+        guard mode == .collapsed, !hasLiveActivity else { return }
+        peekabooUntil = Date().addingTimeInterval(hold)
+        SoundFX.play(.peek)
+        withAnimation(Motion.peek) { mode = .peekaboo }
+    }
+
+    /// Now and then, while you're at the Mac and the notch is idle.
+    private func maybePeek() {
+        guard Date() >= nextPeek else { return }
+        nextPeek = Date().addingTimeInterval(Double.random(in: 12...25) * 60)
+        let idleFor = min(CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved),
+                          CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown))
+        guard Prefs.on(Prefs.characterPeek), UserDefaults.standard.string(forKey: "character.style") ?? "puff" == "puff",
+              idleFor < 60, !fileDrag else { return }
+        peekaboo()
+    }
 
     /// Camera mirror: asks for the camera the first time (with the notch out
     /// of the way of the dialog), then drops the live preview out of the notch.

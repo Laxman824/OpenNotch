@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mediaPoll: Timer?
     private let systemMonitor = SystemMonitor()
     private let health = HealthMonitor()
+    private let privacyMonitor = PrivacyMonitor()
+    private var scheduleTimer: Timer?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // ── Resilience: run under the launchd supervisor, one copy only ──
@@ -48,8 +50,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.notch.peek()
         }
         backend.onApproval = { [weak self] in
+            guard let self else { return }
             Chime.attention()
-            self?.notch.expand(pinned: true)
+            if let a = self.backend.approvals.last {
+                self.handsFree.approvalRequested(a)
+                // Not answered yet? Nudge again (the closed notch keeps glowing meanwhile).
+                for delay in [25.0, 50.0] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                        if self?.backend.approvals.contains(where: { $0.id == a.id }) == true { Chime.attention() }
+                    }
+                }
+            }
+            self.notch.expand(pinned: true)
         }
         backend.onTextDelta = { [weak self] d in self?.handsFree.feed(d) }
         backend.onTurnFinished = { [weak self] text, streamed in self?.handsFree.turnFinished(text, streamed: streamed) }
@@ -157,6 +169,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if Prefs.on(Prefs.hudHealth) { self?.notch.showHUD(h, for: 4.5) }
         }
         health.start()
+        privacyMonitor.onChange = { [weak self] s in
+            guard let self else { return }
+            var state = s
+            if self.notch.mode == .mirror { state.camera = false }          // that's our own mirror
+            if !Prefs.on(Prefs.hudPrivacy) { state = PrivacyState() }
+            let new = state.micApps.filter { !self.notch.privacy.micApps.contains($0) }
+            let cameraStarted = state.camera && !self.notch.privacy.camera
+            withAnimation(Motion.open) { self.notch.privacy = state }
+            // If something else owns the ears, still say who just started listening.
+            if (!new.isEmpty || cameraStarted) && self.notch.earActivity != .privacy {
+                let who = new.first ?? "An app"
+                self.notch.showHUD(.health(icon: new.isEmpty ? "video.fill" : "mic.fill",
+                                           title: new.isEmpty ? "Camera on" : "\(who) · mic on",
+                                           detail: new.isEmpty ? "An app started the camera" : "Using your microphone", tone: 1), for: 3)
+            }
+        }
+        privacyMonitor.start()
+        // Scheduled prompts ("every weekday at 9 …"): run when due and the agent is free.
+        scheduleTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, !self.backend.busy, self.backend.aiConnected,
+                      let task = ScheduleStore.shared.takeDue().first else { return }
+                self.backend.core.send(task.prompt, display: "⏰ " + task.prompt)
+            }
+        }
         KeepAwake.shared.onChange = { [weak self] on in
             self?.notch.objectWillChange.send()
             self?.notch.showHUD(.awake(on: on, label: HealthLogic.awakeLabel(until: KeepAwake.shared.until)
@@ -199,6 +236,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 if name == "player" { self.notch.openPlayer(hold: 5); return }     // the hover music player
                 if name == "mirror" { self.notch.openMirror(hold: 6); return }     // camera mirror
+                if name == "peek" { self.notch.peekaboo(); return }                // Puff says hi
+                if name == "busytest" {                                           // dev: the "AI working" look, no AI call
+                    self.backend.busy = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.backend.busy = false }
+                    return
+                }
                 if name == "palette" {                                             // ⌘K
                     self.notch.expand(pinned: true, focus: true)
                     self.notch.showPalette = true
@@ -338,6 +381,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct OpenNotchMain {
     static func main() {
+        if let i = CommandLine.arguments.firstIndex(of: "--render-character") {
+            let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "character.png"
+            exit(MainActor.assumeIsolated { CharacterSheet.render(to: out) })
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-ears") {
+            let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "ears.png"
+            exit(MainActor.assumeIsolated { EarsSheet.render(to: out) })
+        }
+        if CommandLine.arguments.contains("--probe-menubar") {          // dev: list menu bar icons (read-only)
+            MainActor.assumeIsolated {
+                guard AXIsProcessTrusted() else { print("not trusted for Accessibility"); exit(1) }
+                let apps = NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0.localizedName ?? "App", $0.icon) }
+                let items = MenuBarStore.scan(apps: apps, front: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                                              geometry: MenuBarStore.notchGeometry())
+                for i in items { print(i.hidden ? "HIDDEN " : "       ", i.appName, "—", i.label, "x:", Int(i.frame.minX), "w:", Int(i.frame.width)) }
+                print("\(items.count) icons, \(items.filter(\.hidden).count) hidden; notch gap:", MenuBarStore.notchGeometry().notchGap as Any)
+            }
+            exit(0)
+        }
+        if CommandLine.arguments.contains("--probe-privacy") {          // dev: who's using mic / camera now
+            print("mic:", PrivacyMonitor.micApps(), "camera:", PrivacyMonitor.cameraOn())
+            exit(0)
+        }
         if CommandLine.arguments.contains("--checks") {
             Task { @MainActor in exit(await AgentChecks.run()) }
             RunLoop.main.run()

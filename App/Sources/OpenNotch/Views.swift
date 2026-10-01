@@ -44,49 +44,52 @@ struct NotchShape: Shape {
     }
 }
 
-/// The Ledge "orb" — a rotating angular gradient. Spins while working.
-struct Orb: View {
-    var size: CGFloat = 14
-    var active: Bool
-    @State private var angle: Double = 0
-
-    var body: some View {
-        Circle()
-            .fill(AngularGradient(colors: Theme.glow, center: .center, angle: .degrees(angle)))
-            .frame(width: size, height: size)
-            .overlay(Circle().fill(.white.opacity(0.25)).frame(width: size * 0.35).blur(radius: size * 0.12)
-                .offset(x: -size * 0.15, y: -size * 0.15))
-            .shadow(color: Theme.glow[1].opacity(active ? 0.8 : 0.3), radius: active ? size * 0.6 : size * 0.25)
-            .scaleEffect(active ? 1.0 : 0.92)
-            .onAppear { spin() }
-            .onChange(of: active) { _ in spin() }
-    }
-
-    private func spin() {
-        guard active else { return }
-        withAnimation(.linear(duration: 2.2).repeatForever(autoreverses: false)) { angle += 360 }
-    }
-}
-
 /// Apple-Intelligence-style glow that runs round the panel edge while busy.
+///
+/// Performance: the rainbow is a conic gradient rendered **once** into an
+/// image; the animation only rotates that image (a cheap GPU transform) under a
+/// static stroke mask. The old version animated the gradient's angle under a
+/// blur, which re-rasterised a full-panel conic on the CPU every frame and made
+/// opening/closing the notch stutter whenever the AI was working.
 struct GlowBorder: View {
     var radius: CGFloat
     /// 0…1. Fixed at 1 while a turn runs; follows the voice in hands-free.
     var intensity: CGFloat = 1
-    @State private var angle: Double = 0
+    @State private var spin = false
+    @ObservedObject private var policy = AnimationPolicy.shared
+
+    @MainActor static let wheel: NSImage = {
+        let r = ImageRenderer(content: Circle()
+            .fill(AngularGradient(colors: Theme.glow + [Theme.glow[0]], center: .center))
+            .frame(width: 256, height: 256))
+        r.scale = 1
+        return r.nsImage ?? NSImage()
+    }()
 
     var body: some View {
-        let gradient = AngularGradient(colors: Theme.glow, center: .center, angle: .degrees(angle))
         let k = max(0.25, min(1, intensity))
-        ZStack {
-            NotchShape(radius: radius).stroke(gradient, lineWidth: 1.5 + 1.5 * k)
-            NotchShape(radius: radius).stroke(gradient, lineWidth: 4 + 8 * k).blur(radius: 8 + 6 * k).opacity(0.35 + 0.5 * k)
+        GeometryReader { g in
+            let side = (g.size.width * g.size.width + g.size.height * g.size.height).squareRoot()
+            Image(nsImage: Self.wheel)
+                .resizable()
+                .frame(width: side, height: side)
+                .rotationEffect(.degrees(spin ? 360 : 0))
+                .frame(width: g.size.width, height: g.size.height)
+                .mask {
+                    ZStack {
+                        NotchShape(radius: radius).stroke(lineWidth: 14 + 10 * k).opacity(0.10 + 0.12 * k)
+                        NotchShape(radius: radius).stroke(lineWidth: 6 + 5 * k).opacity(0.25 + 0.3 * k)
+                        NotchShape(radius: radius).stroke(lineWidth: 1.5 + 1.5 * k)
+                    }
+                }
         }
         .animation(.easeOut(duration: 0.12), value: k)
         .onAppear {
-            withAnimation(.linear(duration: 3.5).repeatForever(autoreverses: false)) { angle = 360 }
+            guard !policy.reduceMotion else { return }
+            withAnimation(.linear(duration: 3.5).repeatForever(autoreverses: false)) { spin = true }
         }
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -107,6 +110,7 @@ struct RootView: View {
         case .peek, .alert: return 18
         case .player: return 24
         case .mirror: return 22
+        case .peekaboo: return 20
         case .expanded: return 26
         }
     }
@@ -127,7 +131,11 @@ struct RootView: View {
         let size = notch.visibleSize
         ZStack(alignment: .top) {
             ZStack {
-                NotchShape(radius: radius).fill(isTucked ? Color.black : Theme.panel)
+                if isTucked {
+                    NotchShape(radius: radius).fill(Color.black)
+                } else {
+                    NotchSurface(radius: radius, notchHeight: notch.notchSize.height)
+                }
                 if !isTucked {
                     NotchShape(radius: radius)
                         .stroke(dropTargeted ? Theme.glow[0] : Theme.hairline, lineWidth: dropTargeted ? 2 : 1)
@@ -139,13 +147,18 @@ struct RootView: View {
                 }
             }
             .frame(width: size.width, height: size.height)
+            .overlay {
+                // A tool is waiting for an OK while the notch is closed: pulse yellow.
+                if isTucked && !backend.approvals.isEmpty { ApprovalGlow(radius: radius) }
+            }
             // Fixed radius, animated opacity only: re-blurring a changing
             // radius every frame is what made the old open stutter.
             .shadow(color: .black.opacity(isTucked ? 0 : 0.55), radius: 24, y: 10)
             // Hands-free with the notch closed: a Siri-like glow breathes
             // out from under the notch with the voice.
-            .shadow(color: voiceGlow.opacity(isTucked && handsFree.isOn ? 0.35 + 0.65 * Double(min(1, handsFree.waveLevel * 1.5)) : 0),
-                    radius: isTucked && handsFree.isOn ? 6 + 16 * min(1, handsFree.waveLevel * 1.5) : 0, y: 3)
+            // Fixed radius, opacity follows the voice (a changing radius re-blurs every frame).
+            .shadow(color: voiceGlow.opacity(isTucked && handsFree.isOn ? 0.3 + 0.7 * Double(min(1, handsFree.waveLevel * 1.5)) : 0),
+                    radius: 14, y: 3)
             .animation(.easeOut(duration: 0.12), value: handsFree.waveLevel)
 
             // Small states are tiny — rebuilt per mode with a quick cross-fade.
@@ -157,6 +170,7 @@ struct RootView: View {
                 case .peek: PeekView(backend: backend, notch: notch)
                 case .player: PlayerView(backend: backend, notch: notch)
                 case .mirror: MirrorView(notch: notch)
+                case .peekaboo: PeekabooView(notch: notch, backend: backend)
                 case .alert: AlertPeek(alert: notch.alert ?? .hydration, backend: backend, notch: notch,
                                        drank: { hub.timers.drank() })
                 case .expanded: Color.clear
@@ -365,6 +379,10 @@ struct CollapsedView: View {
                     TimerRingEar(timers: timers).frame(width: ear)
                     Spacer().frame(width: notch.notchSize.width)
                     TimerClockEar(timers: timers).frame(width: ear)
+                case .privacy:
+                    HStack { Spacer(); PrivacyLeftEar(state: notch.privacy) }.padding(.trailing, 14).frame(width: ear)
+                    Spacer().frame(width: notch.notchSize.width)
+                    PrivacyRightEar(state: notch.privacy).frame(width: ear)
                 case .awake:
                     AwakeEars(side: false).frame(width: ear)
                     Spacer().frame(width: notch.notchSize.width)
@@ -394,11 +412,17 @@ struct CollapsedView: View {
                     left.frame(width: ear)
                     Spacer().frame(width: notch.notchSize.width)
                     right
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .lineLimit(1)
                         .frame(width: ear)
                         .contentTransition(.numericText())
                 }
+            }
+        }
+        .overlay(alignment: .trailing) {
+            // Mic / camera in use while something else owns the ears: the system-style dots.
+            if notch.privacy.active && notch.earActivity != .privacy && notch.hasLiveActivity {
+                PrivacyDots(state: notch.privacy).padding(.trailing, 7)
             }
         }
         .transition(.opacity)
@@ -428,6 +452,10 @@ struct CollapsedView: View {
             return "Now playing \(np.track)" + (np.artist.isEmpty ? "" : " by \(np.artist)")
         case .agent:
             return !backend.approvals.isEmpty ? "Ledge needs your approval" : backend.busy ? "Ledge is working" : "Hands-free on"
+        case .privacy:
+            let p = notch.privacy
+            return (p.micApps.isEmpty ? "" : "\(p.micApps.joined(separator: ", ")) is using the microphone. ")
+                + (p.camera ? "Camera is on." : "")
         case .awake:
             return "Keeping your Mac awake, " + HealthLogic.awakeLabel(until: KeepAwake.shared.until)
                 .replacingOccurrences(of: "∞", with: "until you stop it")
@@ -443,10 +471,22 @@ struct CollapsedView: View {
 
     /// Right ear while Ledge is involved: one word of status, highest priority first.
     @ViewBuilder private var right: some View {
-        if !backend.approvals.isEmpty {
-            Text("Approve").foregroundStyle(.yellow)
+        if let a = backend.approvals.first {
+            VStack(alignment: .leading, spacing: -1) {
+                Text("NEEDS YOUR OK").font(.system(size: 8.5, weight: .heavy, design: .rounded)).tracking(0.8)
+                    .foregroundStyle(.yellow)
+                Text(VoiceTurn.approvalShort(a.tool)).font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 4)
         } else if backend.busy {
-            Text(backend.lastTool.isEmpty ? "Thinking" : backend.lastTool).foregroundStyle(.white.opacity(0.75))
+            if let p = backend.planProgress {
+                Text("Step \(min(p.total, p.done + 1))/\(p.total)").monospacedDigit().foregroundStyle(.white.opacity(0.85))
+            } else {
+                Text(backend.lastTool.isEmpty ? (backend.thinkingNow ? "Thinking…" : "Working") : backend.lastTool)
+                    .foregroundStyle(.white.opacity(0.75))
+            }
         } else if handsFree.isOn {
             if handsFree.phase == .standby || handsFree.phase == .starting {
                 Text(handsFreeLabel).foregroundStyle(Theme.secondary)
@@ -507,15 +547,17 @@ struct QuickAction: Identifiable {
 
 let quickActions: [QuickAction] = [
     QuickAction(icon: "sun.max", title: "Plan my day",
-                prompt: "Help me plan today: ask what's on my plate if you can't see my calendar, then give me a short, focused plan."),
+                prompt: "Plan my day: look at today's calendar events, my open reminders and the weather where I am, then give me a short, focused plan."),
+    QuickAction(icon: "tray.full", title: "Catch up on email",
+                prompt: "Catch up on my email from the last day in Mail: group it into needs a reply, FYI and noise. Offer to draft replies."),
+    QuickAction(icon: "safari", title: "Summarise this page",
+                prompt: "Summarise the page I'm looking at in my browser in a few bullet points, then tell me the one thing worth remembering."),
     QuickAction(icon: "camera.viewfinder", title: "Explain my screen",
                 prompt: "What's on my screen? Explain it briefly and suggest the next step.", screenshot: true),
     QuickAction(icon: "doc.on.clipboard", title: "Work on clipboard",
                 prompt: "Explain what's in my clipboard, then improve or fix it.", clipboard: true),
     QuickAction(icon: "arrowshape.turn.up.left", title: "Draft a reply",
                 prompt: "Draft a friendly, concise reply to the message in my clipboard. Match its language and tone.", clipboard: true),
-    QuickAction(icon: "text.badge.checkmark", title: "Summarise clipboard",
-                prompt: "Summarise what's in my clipboard in a few bullet points, then list any action items.", clipboard: true),
     QuickAction(icon: "lightbulb", title: "Brainstorm",
                 prompt: "Let's brainstorm. Ask me one short question about what I'm working on, then give me ideas."),
 ]
@@ -588,7 +630,20 @@ struct ExpandedView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
         }
-        .onChange(of: isOpen) { open in if !open { notch.showPalette = false } }
+        .overlay(alignment: .top) {
+            if notch.showHistory {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.45).onTapGesture { withAnimation(.easeOut(duration: 0.15)) { notch.showHistory = false } }
+                    ChatHistoryView(backend: backend) {
+                        withAnimation(.easeOut(duration: 0.15)) { notch.showHistory = false }
+                        hub.module = .chat
+                    }
+                    .padding(.top, 56)
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+            }
+        }
+        .onChange(of: isOpen) { open in if !open { notch.showPalette = false; notch.showHistory = false } }
         .onChange(of: notch.focusInput) { v in if v { focusSoon() } }
         .onChange(of: inputFocused) { v in if v { notch.pinned = true } }
         .onChange(of: dictation.transcript) { t in if dictation.listening { draft = t } }
@@ -604,6 +659,8 @@ struct ExpandedView: View {
                 Button("") { SettingsWindow.shared.show() }.keyboardShortcut(",", modifiers: .command)
                 Button("") { withAnimation(.spring(duration: 0.25, bounce: 0.15)) { notch.showPalette.toggle() } }
                     .keyboardShortcut("k", modifiers: .command)
+                Button("") { withAnimation(.spring(duration: 0.25, bounce: 0.15)) { notch.showHistory.toggle() } }
+                    .keyboardShortcut("y", modifiers: .command)
             }
             .opacity(0).allowsHitTesting(false)
             .disabled(!isOpen)                      // no ⌘N / ⌘. while the notch is closed
@@ -623,6 +680,9 @@ struct ExpandedView: View {
                 backend.newChat(); hub.module = .chat },
             PaletteItem(id: "hf", group: .action, icon: "waveform.circle", title: handsFree.isOn ? "End hands-free" : "Hands-free mode",
                         subtitle: "⌥⇧Space", keywords: "voice talk speak") { handsFree.toggle() },
+            PaletteItem(id: "history", group: .action, icon: "clock.arrow.circlepath", title: "Chat history", subtitle: "⌘Y",
+                        keywords: "previous conversations past chats") {
+                withAnimation(.spring(duration: 0.25)) { notch.showHistory = true } },
             PaletteItem(id: "settings", group: .action, icon: "gearshape", title: "Settings", subtitle: "⌘,", keywords: "preferences") {
                 SettingsWindow.shared.show() },
             PaletteItem(id: "perms", group: .action, icon: "lock.shield", title: "Permissions checklist", keywords: "privacy allow") {
@@ -904,6 +964,9 @@ struct Header: View {
 
             HStack(spacing: 14) {
                 HandsFreeSwitch(handsFree: handsFree)
+                iconButton("clock.arrow.circlepath", "Chat history (⌘Y)") {
+                    withAnimation(.spring(duration: 0.25, bounce: 0.15)) { notch.showHistory.toggle() }
+                }
                 iconButton("square.and.pencil", "New chat (⌘N)") { backend.newChat() }
                 iconButton(notch.pinned ? "pin.fill" : "pin", notch.pinned ? "Unpin (⌘P)" : "Keep open (⌘P)") {
                     notch.pinned.toggle()
@@ -961,14 +1024,24 @@ struct Transcript: View {
     @ObservedObject var backend: Backend
     let run: (QuickAction) -> Void
 
+    // A plain VStack, not Lazy: LazyVStack + scrollTo("bottom") + rows that change
+    // height (streaming text, the working row) can loop in layout forever and hang
+    // the app. Long chats render only their tail.
+    @State private var shown = 150
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 10) {
                     if backend.items.isEmpty {
                         EmptyState(backend: backend, run: run)
                     }
-                    ForEach(backend.items) { ItemRow(item: $0) }
+                    if backend.items.count > shown {
+                        Button("Show earlier messages") { shown += 150 }
+                            .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.secondary).frame(maxWidth: .infinity)
+                    }
+                    ForEach(backend.items.suffix(shown)) { ItemRow(item: $0) }
                     if backend.busy, !(backend.items.last?.streaming ?? false) {
                         WorkingRow(backend: backend, started: backend.turnStarted, tool: backend.lastTool)
                     }
@@ -1152,29 +1225,11 @@ struct ItemRow: View {
             }
             .onHover { hover = $0 }
         case let .tool(state, _, verb, detail, error):
-            HStack(spacing: 7) {
-                ZStack {
-                    if state == "running" {
-                        ProgressView().controlSize(.mini).scaleEffect(0.8)
-                    } else {
-                        Image(systemName: toolSymbol(verb))
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(state == "done" ? Theme.secondary : .red)
-                    }
-                }
-                .frame(width: 16, height: 16)
-                Text(verb).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white.opacity(0.75))
-                Text(error ?? detail)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(error == nil ? Theme.tertiary : .red.opacity(0.85))
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 0)
-                if state == "done" {
-                    Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.green.opacity(0.8))
-                }
-            }
-            .padding(.horizontal, 9).padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
+            ToolRow(state: state, verb: verb, detail: detail, error: error, details: item.details)
+        case .thinking:
+            ThinkingRow(item: item)
+        case let .plan(steps):
+            PlanCard(steps: steps)
         case .info:
             Text(item.text)
                 .font(.system(size: 11))
@@ -1377,5 +1432,342 @@ struct HeroAvatar: View {
         AssistantFace(size: proactive.proposals.isEmpty ? 86 : 60, backend: backend)
             .padding(.top, 6)
             .animation(.spring(duration: 0.35, bounce: 0.1), value: proactive.proposals.isEmpty)
+    }
+}
+
+
+/// Puff dropping out of the notch to say hi.
+struct PeekabooView: View {
+    @ObservedObject var notch: NotchController
+    @ObservedObject var backend: Backend
+    @State private var out = false
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.clear
+            AssistantFace(size: 46, backend: backend, greets: true)
+                .offset(y: out ? notch.notchSize.height + 6 : -30)
+                .scaleEffect(out ? 1 : 0.6, anchor: .top)
+        }
+        .onAppear { withAnimation(.spring(duration: 0.55, bounce: 0.45).delay(0.08)) { out = true } }
+    }
+}
+
+
+// MARK: - Seeing the agent work
+
+/// A tool call. Tap to see what was sent and what came back.
+struct ToolRow: View {
+    let state: String
+    let verb: String
+    let detail: String
+    let error: String?
+    let details: String?
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                ZStack {
+                    if state == "running" {
+                        ProgressView().controlSize(.mini).scaleEffect(0.8)
+                    } else {
+                        Image(systemName: toolSymbol(verb))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(state == "done" ? Theme.secondary : .red)
+                    }
+                }
+                .frame(width: 16, height: 16)
+                Text(verb).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white.opacity(0.75))
+                Text(error ?? detail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(error == nil ? Theme.tertiary : .red.opacity(0.85))
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                if state == "done" {
+                    Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.green.opacity(0.8))
+                }
+                if details != nil {
+                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Theme.tertiary).rotationEffect(.degrees(open ? 90 : 0))
+                }
+            }
+            if open, let details {
+                Text(details)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(Theme.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.25)))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
+        .contentShape(Rectangle())
+        .onTapGesture { if details != nil { withAnimation(.spring(duration: 0.25)) { open.toggle() } } }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(details != nil ? "Tap to show details" : "")
+    }
+}
+
+/// The model's reasoning: streams live (latest lines), then folds into "Thought for 6s".
+struct ThinkingRow: View {
+    let item: Item
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(LinearGradient(colors: [Theme.glow[0], Theme.glow[1]], startPoint: .leading, endPoint: .trailing))
+                    .symbolEffect(.pulse, isActive: item.streaming)
+                if item.streaming {
+                    ShimmerText(text: "Thinking…")
+                } else {
+                    Text(item.meta ?? "Thought").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.secondary)
+                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Theme.tertiary).rotationEffect(.degrees(open ? 90 : 0))
+                }
+                Spacer(minLength: 0)
+            }
+            if item.streaming || open {
+                Text(item.streaming ? Self.tail(item.text) : item.text)
+                    .font(.system(size: 11.5))
+                    .italic()
+                    .foregroundStyle(Theme.tertiary)
+                    .lineLimit(item.streaming ? 3 : nil)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 10)
+                    .overlay(alignment: .leading) {
+                        Capsule().fill(Theme.glow[1].opacity(0.4)).frame(width: 2)
+                    }
+                    .transition(.opacity)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if !item.streaming { withAnimation(.spring(duration: 0.25)) { open.toggle() } } }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(item.streaming ? "Thinking" : (item.meta ?? "Thought"))
+    }
+
+    /// The last ~240 characters, starting at a word.
+    static func tail(_ s: String) -> String {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count > 240 else { return t }
+        let cut = t.suffix(240)
+        return "…" + (cut.firstIndex(of: " ").map { String(cut[$0...]) } ?? String(cut))
+    }
+}
+
+/// A soft light sweeping across the text while something is in progress.
+struct ShimmerText: View {
+    let text: String
+    @ObservedObject private var policy = AnimationPolicy.shared
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / policy.fps, paused: policy.reduceMotion)) { ctx in
+            let x = CGFloat((ctx.date.timeIntervalSinceReferenceDate * 0.8).truncatingRemainder(dividingBy: 1)) * 1.6 - 0.3
+            Text(text)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(LinearGradient(stops: [.init(color: Theme.secondary, location: 0),
+                                                        .init(color: Theme.secondary, location: max(0, x - 0.15)),
+                                                        .init(color: .white, location: min(1, max(0, x))),
+                                                        .init(color: Theme.secondary, location: min(1, x + 0.15)),
+                                                        .init(color: Theme.secondary, location: 1)],
+                                                startPoint: .leading, endPoint: .trailing))
+        }
+    }
+}
+
+/// The agent's plan, as a live checklist with progress.
+struct PlanCard: View {
+    let steps: [PlanStep]
+
+    var body: some View {
+        let done = steps.filter { $0.status == "completed" }.count
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Image(systemName: "checklist").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.glow[0])
+                Text("Plan").font(.system(size: 12, weight: .bold))
+                Spacer()
+                Text("\(done) of \(steps.count)").font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Theme.secondary)
+            }
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.08))
+                    Capsule().fill(LinearGradient(colors: [Theme.glow[0], Theme.glow[1]], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: steps.isEmpty ? 0 : g.size.width * CGFloat(done) / CGFloat(steps.count))
+                }
+            }
+            .frame(height: 3)
+            .animation(.spring(duration: 0.4), value: done)
+            ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                HStack(alignment: .top, spacing: 8) {
+                    Group {
+                        switch step.status {
+                        case "completed": Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        case "in_progress": ProgressView().controlSize(.mini).scaleEffect(0.75)
+                        default: Image(systemName: "circle").foregroundStyle(Theme.tertiary)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .frame(width: 14, height: 14)
+                    Text(step.content)
+                        .font(.system(size: 12, weight: step.status == "in_progress" ? .semibold : .regular))
+                        .foregroundStyle(step.status == "completed" ? Theme.tertiary : .white.opacity(0.9))
+                        .strikethrough(step.status == "completed", color: Theme.tertiary)
+                    Spacer(minLength: 0)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityValue(step.status.replacingOccurrences(of: "_", with: " "))
+            }
+        }
+        .padding(11)
+        .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.hairline))
+        .animation(.spring(duration: 0.3), value: steps)
+    }
+}
+
+
+// MARK: - Chat history
+
+/// Every earlier conversation on this Mac: search, reopen, delete.
+struct ChatHistoryView: View {
+    @ObservedObject var backend: Backend
+    let close: () -> Void
+    @State private var query = ""
+    @State private var chats: [SessionStore.Summary] = []
+    @State private var confirmDelete: String? = nil
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(Theme.secondary).accessibilityHidden(true)
+                TextField("Search your chats", text: $query)
+                    .textFieldStyle(.plain).font(.system(size: 14))
+                    .focused($focused)
+                    .onKeyPress(.escape) { close(); return .handled }
+                    .accessibilityLabel("Search chats")
+                Button { backend.newChat(); close() } label: {
+                    Label("New chat", systemImage: "square.and.pencil").font(.system(size: 11.5, weight: .semibold))
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.glow[0])
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            Divider().overlay(Theme.hairline)
+            if chats.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 22)).foregroundStyle(Theme.tertiary)
+                    Text(query.isEmpty ? "No earlier chats yet." : "No chats match “\(query)”.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 30)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Self.grouped(chats), id: \.0) { section, list in
+                            Text(section.uppercased())
+                                .font(.system(size: 9.5, weight: .heavy, design: .rounded)).tracking(0.7)
+                                .foregroundStyle(Theme.tertiary)
+                                .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 3)
+                            ForEach(list) { c in row(c) }
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: 340)
+            }
+        }
+        .frame(width: 540)
+        .background(RoundedRectangle(cornerRadius: 18).fill(Color(white: 0.09)))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.white.opacity(0.12)))
+        .shadow(color: .black.opacity(0.5), radius: 30, y: 12)
+        .onAppear { refresh(); DispatchQueue.main.async { focused = true } }
+        .onChange(of: query) { _, _ in refresh() }
+    }
+
+    private func row(_ c: SessionStore.Summary) -> some View {
+        let current = c.id == backend.currentChatID
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: current ? "bubble.left.fill" : "bubble.left")
+                .font(.system(size: 12)).foregroundStyle(current ? Theme.glow[0] : Theme.tertiary)
+                .frame(width: 18).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(c.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    if current { Text("Open").font(.system(size: 9.5, weight: .bold)).foregroundStyle(Theme.glow[0]) }
+                }
+                Text(c.preview.isEmpty ? "\(c.messages) messages" : c.preview)
+                    .font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text(c.updated, format: .relative(presentation: .named))
+                .font(.system(size: 10.5)).foregroundStyle(Theme.tertiary)
+            Button {
+                if confirmDelete == c.id { backend.deleteChat(c.id); confirmDelete = nil; refresh() }
+                else { confirmDelete = c.id }
+            } label: {
+                Image(systemName: confirmDelete == c.id ? "trash.fill" : "trash")
+                    .font(.system(size: 11))
+                    .foregroundStyle(confirmDelete == c.id ? .red : Theme.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help(confirmDelete == c.id ? "Click again to delete" : "Delete this chat")
+            .accessibilityLabel(confirmDelete == c.id ? "Confirm delete" : "Delete chat")
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill(current ? AnyShapeStyle(Theme.userBubble.opacity(0.25)) : AnyShapeStyle(Color.clear)))
+        .contentShape(Rectangle())
+        .onTapGesture { backend.openChat(c.id); close() }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func refresh() { chats = backend.chats(matching: query) }
+
+    /// Today / Yesterday / This week / Earlier.
+    static func grouped(_ list: [SessionStore.Summary]) -> [(String, [SessionStore.Summary])] {
+        let cal = Calendar.current
+        var out: [(String, [SessionStore.Summary])] = []
+        func put(_ k: String, _ c: SessionStore.Summary) {
+            if let i = out.firstIndex(where: { $0.0 == k }) { out[i].1.append(c) } else { out.append((k, [c])) }
+        }
+        for c in list {
+            if cal.isDateInToday(c.updated) { put("Today", c) }
+            else if cal.isDateInYesterday(c.updated) { put("Yesterday", c) }
+            else if c.updated > Date().addingTimeInterval(-7 * 86400) { put("This week", c) }
+            else { put("Earlier", c) }
+        }
+        return out
+    }
+}
+
+
+/// The closed notch asking for attention: a soft yellow rim that pulses.
+/// Fixed shadow radius, animated opacity only (no per-frame blur changes).
+struct ApprovalGlow: View {
+    let radius: CGFloat
+    @State private var on = false
+    @ObservedObject private var policy = AnimationPolicy.shared
+
+    var body: some View {
+        NotchShape(radius: radius)
+            .stroke(Color.yellow.opacity(0.9), lineWidth: 1.5)
+            .shadow(color: .yellow.opacity(0.8), radius: 9)
+            .opacity(on ? 1 : 0.3)
+            .onAppear {
+                guard !policy.reduceMotion else { on = true; return }
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { on = true }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }

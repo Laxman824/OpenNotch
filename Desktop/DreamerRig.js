@@ -1382,3 +1382,38 @@ export const sleepPose = ({ t }) => {
   }
   return P;
 };
+
+// Poked: arms folded, chin up, head turned away — "hmph".
+export const annoyedPose = ({ t }) => ({
+  shXL: -0.55, shYL: 0, shZL: 0.42, elL: 2.15,
+  shXR: -0.6, shYR: 0, shZR: 0.38, elR: 2.2,
+  neckY: 0.55 + 0.05 * Math.sin(t * 3), neckX: -0.12, lean: -0.05,
+});
+
+// Three quick pokes: dizzy — head rolls in circles, body sways, arms loose.
+export const dizzyPose = ({ t }) => {
+  const P = {
+    neckX: 0.18 * Math.sin(t * 5.5), neckY: 0.3 * Math.cos(t * 5.5),
+    twist: 0.18 * Math.sin(t * 2.7), lean: 0.06 + 0.05 * Math.sin(t * 3.1),
+    hipsYaw: 0.12 * Math.sin(t * 2.7 + 1),
+  };
+  for (const [k, s] of SIDES) {
+    P[`shX${k}`] = 0.1 * Math.sin(t * 3 + s);
+    P[`shY${k}`] = 0;
+    P[`shZ${k}`] = 0.55 + 0.25 * Math.sin(t * 2.7 + s);
+    P[`el${k}`] = 0.5;
+    P[`kn${k}`] = 0.22 + 0.12 * Math.sin(t * 2.7 + (s > 0 ? 0 : Math.PI));
+  }
+  return P;
+};
+
+// Petted: hands to cheeks, swaying happily.
+export const lovePose = ({ t }) => {
+  const sway = Math.sin(t * 3.2);
+  return {
+    shXL: -1.25, shYL: 0, shZL: 0.12, elL: 2.45,
+    shXR: -1.25, shYR: 0, shZR: 0.12, elR: 2.45,
+    neckY: 0.18 * sway, neckX: -0.08, twist: 0.12 * sway, hipsYaw: -0.06 * sway,
+    knL: 0.12 + 0.06 * Math.max(0, sway), knR: 0.12 + 0.06 * Math.max(0, -sway),
+  };
+};

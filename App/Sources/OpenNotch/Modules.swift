@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 /// Everything the notch can show besides the chat. Each can be switched off
 /// (right-click › Modules) so the bar only carries what fits your day.
 enum Module: String, CaseIterable, Identifiable {
-    case chat, files, clipboard, shelf, notes, timers, calendar, media, system, screenTime, convert, usage, captures
+    case chat, files, menubar, clipboard, shelf, notes, timers, calendar, media, system, screenTime, convert, usage, captures
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum Module: String, CaseIterable, Identifiable {
         switch self {
         case .chat: return "Ledge"
         case .files: return "Find files"
+        case .menubar: return "Menu bar"
         case .clipboard: return "Clipboard"
         case .shelf: return "Shelf"
         case .notes: return "Notes"
@@ -31,6 +32,7 @@ enum Module: String, CaseIterable, Identifiable {
         switch self {
         case .chat: return "sparkles"
         case .files: return "magnifyingglass"
+        case .menubar: return "menubar.dock.rectangle"
         case .clipboard: return "doc.on.clipboard"
         case .shelf: return "tray.and.arrow.down"
         case .notes: return "note.text"
@@ -63,6 +65,7 @@ final class Hub: ObservableObject {
     let usage = UsageStore()
     let captures = CaptureStore()
     let files = FileSearch()
+    let menubar = MenuBarStore()
     let convert = ConvertStore()
     let context = ContextModel()
     let proactive = ProactiveEngine()
@@ -136,6 +139,7 @@ struct ModuleHost: View {
             switch hub.module {
             case .chat: EmptyView()
             case .files: FilesView(store: hub.files, backend: backend, hub: hub)
+            case .menubar: MenuBarView(store: hub.menubar, notch: notch)
             case .clipboard: ClipboardView(store: hub.clipboard, backend: backend, hub: hub)
             case .shelf: ShelfView(store: hub.shelf, backend: backend, hub: hub)
             case .notes: NotesView(store: hub.notes, backend: backend, notch: notch, hub: hub)

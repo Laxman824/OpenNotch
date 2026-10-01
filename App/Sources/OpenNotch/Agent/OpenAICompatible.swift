@@ -11,6 +11,8 @@ struct OpenAICompatibleProvider: ChatProvider {
     /// `stream_options.include_usage` — not every server accepts it.
     var usageInStream = true
     var supportsImages = true
+    /// Ask the server to include reasoning in the stream (OpenRouter).
+    var requestReasoning = false
 
     var isConnected: Bool { true }
     var supportsTools: Bool { true }
@@ -22,6 +24,7 @@ struct OpenAICompatibleProvider: ChatProvider {
             "messages": [["role": "system", "content": system]] + messages.compactMap(Self.wire(supportsImages)),
         ]
         if usageInStream { body["stream_options"] = ["include_usage": true] }
+        if requestReasoning { body["reasoning"] = ["exclude": false] }
         if !tools.isEmpty {
             body["tools"] = tools.map { t in
                 ["type": "function",
@@ -55,6 +58,10 @@ struct OpenAICompatibleProvider: ChatProvider {
                         guard let choice = (obj["choices"] as? [[String: Any]])?.first else { continue }
                         if let f = choice["finish_reason"] as? String { finish = f }
                         guard let delta = choice["delta"] as? [String: Any] else { continue }
+                        // Reasoning models stream their thoughts under one of these names.
+                        if let r = (delta["reasoning"] as? String) ?? (delta["reasoning_content"] as? String), !r.isEmpty {
+                            c.yield(.thinking(r))
+                        }
                         if let t = delta["content"] as? String, !t.isEmpty { c.yield(.text(t)) }
                         for tc in delta["tool_calls"] as? [[String: Any]] ?? [] {
                             let i = tc["index"] as? Int ?? 0

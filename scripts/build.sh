@@ -44,9 +44,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSCameraUsageDescription</key><string>OpenNotch shows a camera mirror in the notch so you can check yourself before a call. Nothing is recorded.</string>
   <key>NSMicrophoneUsageDescription</key><string>OpenNotch listens only while you dictate or use hands-free mode.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>OpenNotch turns what you say into a prompt, on device.</string>
+  <key>NSContactsUsageDescription</key><string>OpenNotch looks up a contact's email or phone when you ask about someone.</string>
   <key>NSCalendarsFullAccessUsageDescription</key><string>OpenNotch shows your upcoming events in the notch. Nothing leaves your Mac.</string>
   <key>NSRemindersFullAccessUsageDescription</key><string>OpenNotch lists, adds and completes your reminders from the notch.</string>
-  <key>NSAppleEventsUsageDescription</key><string>OpenNotch controls Spotify and Music playback when you ask.</string>
+  <key>NSAppleEventsUsageDescription</key><string>OpenNotch controls music, reads your browser tab, Mail and Notes when you ask — and only then.</string>
 </dict></plist>
 PLIST
 

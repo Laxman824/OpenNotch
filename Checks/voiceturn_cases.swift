@@ -28,5 +28,22 @@ vcheck("slow 1", VoiceTurn.slowNotice(elapsed: 25, tool: "gmail_search")?.level 
        && VoiceTurn.slowNotice(elapsed: 25, tool: "gmail_search")!.text.contains("gmail search"))
 vcheck("slow 2", VoiceTurn.slowNotice(elapsed: 75, tool: "")?.level == 2)
 vcheck("slow 3", VoiceTurn.slowNotice(elapsed: 130, tool: "")?.text.contains("2 minutes") == true)
-print(vfailed == 0 ? "voiceturn: 24/24 pass" : "voiceturn: \(vfailed) FAILED")
+// Spoken approvals
+let yesNo: [(String, Bool?)] = [
+    ("Yes", true), ("yeah go ahead", true), ("Okay.", true), ("do it", true), ("sure, run it", true),
+    ("No", false), ("nope", false), ("don't", false), ("cancel", false), ("yes— no, don't", false),
+    ("hmm what is it", nil), ("tell me more first", nil), ("", nil), ("noted", nil), ("yesterday", nil),
+]
+for (t, want) in yesNo {
+    let got = VoiceTurn.approvalAnswer(t)
+    if got != want { vfailed += 1; print("FAIL approval \"\(t)\": want \(String(describing: want)) got \(String(describing: got))") }
+}
+let phrase = VoiceTurn.approvalPhrase(tool: "run_command", args: ["command": "git status"])
+if phrase != "I need your OK to run a command: git status. Say yes to go ahead, or no." { vfailed += 1; print("FAIL phrase run_command: \(phrase)") }
+let ev = VoiceTurn.approvalPhrase(tool: "create_event", args: ["title": "Dentist"])
+if !ev.contains("add “Dentist” to your calendar") { vfailed += 1; print("FAIL phrase event: \(ev)") }
+let mcp = VoiceTurn.approvalPhrase(tool: "mcp__github__create_issue", args: [:])
+if !mcp.contains("use github to create issue") { vfailed += 1; print("FAIL phrase mcp: \(mcp)") }
+if VoiceTurn.approvalShort("edit_file") != "Edit file" { vfailed += 1; print("FAIL short label") }
+print(vfailed == 0 ? "voiceturn: 43/43 pass" : "voiceturn: \(vfailed) FAILED")
 if vfailed > 0 { exit(1) }

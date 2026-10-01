@@ -31,6 +31,8 @@ struct AnthropicProvider: ChatProvider {
         ]
         if !model.contains("haiku") {
             body["output_config"] = ["effort": "medium"]      // Opus 5.5 defaults to medium; be explicit
+            // Show the reasoning: summarized thinking streams as thinking_delta.
+            body["thinking"] = ["type": "adaptive", "display": "summarized"]
         }
         if !tools.isEmpty {
             body["tools"] = tools.map { t in
@@ -81,7 +83,9 @@ struct AnthropicProvider: ChatProvider {
                             case "input_json_delta":
                                 partialJSON[i, default: ""] += d["partial_json"] as? String ?? ""
                             case "thinking_delta":
-                                b["thinking"] = (b["thinking"] as? String ?? "") + (d["thinking"] as? String ?? "")
+                                let th = d["thinking"] as? String ?? ""
+                                b["thinking"] = (b["thinking"] as? String ?? "") + th
+                                if !th.isEmpty { c.yield(.thinking(th)) }
                             case "signature_delta":
                                 b["signature"] = (b["signature"] as? String ?? "") + (d["signature"] as? String ?? "")
                             case "citations_delta":
