@@ -1,0 +1,91 @@
+#!/bin/bash
+# Build OpenNotch.app.   scripts/build.sh [--install] [--open] [--dmg]
+#   --install  copy to ~/Applications (stopping the supervised copy first)
+#   --open     launch it afterwards
+#   --dmg      also make build/OpenNotch-<version>.dmg
+#
+# Signing, best available first:
+#   1. "Developer ID Application: …" in your keychain (or SIGN_ID=…) → hardened
+#      runtime + entitlements, ready for notarisation (scripts/notarize.sh)
+#   2. "OpenNotch Local Signing" (free; scripts/signing.sh creates it) → macOS
+#      keeps permissions across updates, users click "Open Anyway" once
+#   3. ad-hoc → works, but permissions reset on every build
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="$(cat "$ROOT/VERSION")"
+BUILD="$ROOT/build"
+APP="$BUILD/OpenNotch.app"
+
+cd "$ROOT/App"
+# Don't ship the builder's folder layout (home path, username) inside the binary.
+swift build -c release -Xswiftc -file-prefix-map -Xswiftc "$ROOT=/opennotch"
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp .build/release/OpenNotch "$APP/Contents/MacOS/OpenNotch"
+strip -S -x "$APP/Contents/MacOS/OpenNotch"
+# The desktop companion (three.js page), without its test harness.
+rsync -a --delete --exclude test "$ROOT/Desktop/" "$APP/Contents/Resources/desktop/"
+
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>OpenNotch</string>
+  <key>CFBundleDisplayName</key><string>OpenNotch</string>
+  <key>CFBundleIdentifier</key><string>dev.opennotch.OpenNotch</string>
+  <key>CFBundleExecutable</key><string>OpenNotch</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSHumanReadableCopyright</key><string>MIT licensed · github.com/Laxman824/OpenNotch</string>
+  <key>NSCameraUsageDescription</key><string>OpenNotch shows a camera mirror in the notch so you can check yourself before a call. Nothing is recorded.</string>
+  <key>NSMicrophoneUsageDescription</key><string>OpenNotch listens only while you dictate or use hands-free mode.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>OpenNotch turns what you say into a prompt, on device.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>OpenNotch shows your upcoming events in the notch. Nothing leaves your Mac.</string>
+  <key>NSRemindersFullAccessUsageDescription</key><string>OpenNotch lists, adds and completes your reminders from the notch.</string>
+  <key>NSAppleEventsUsageDescription</key><string>OpenNotch controls Spotify and Music playback when you ask.</string>
+</dict></plist>
+PLIST
+
+DEV_ID="${SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
+LOCAL_ID="OpenNotch Local Signing"
+if [ -n "$DEV_ID" ]; then
+  codesign --force --options runtime --timestamp \
+    --entitlements "$ROOT/scripts/OpenNotch.entitlements" --sign "$DEV_ID" "$APP"
+  echo "signed: $DEV_ID (hardened runtime — notarise with scripts/notarize.sh)"
+elif security find-certificate -c "$LOCAL_ID" >/dev/null 2>&1 && codesign --force --sign "$LOCAL_ID" "$APP" 2>/dev/null; then
+  echo "signed: $LOCAL_ID (free local certificate — permissions survive updates)"
+else
+  codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+  echo "note: ad-hoc signed — permissions reset each build. Run scripts/signing.sh once to fix." >&2
+fi
+echo "Built $APP ($VERSION)"
+
+AGENT="$HOME/Library/LaunchAgents/dev.opennotch.app.plist"
+for arg in "$@"; do
+  case "$arg" in
+    --install) # Stop the supervised app first: launchd relaunching it while the
+               # bundle is half-copied is refused by macOS and reads as a crash.
+               if [ -f "$AGENT" ]; then
+                 launchctl bootout "gui/$(id -u)/dev.opennotch.app" 2>/dev/null || true
+                 while pgrep -x OpenNotch >/dev/null; do sleep 0.2; done
+                 REBOOTSTRAP=1
+               fi
+               rm -rf "$HOME/Applications/OpenNotch.app"; mkdir -p "$HOME/Applications"
+               cp -R "$APP" "$HOME/Applications/"; APP="$HOME/Applications/OpenNotch.app"
+               echo "Installed to $APP" ;;
+    --open)    if [ -f "$AGENT" ]; then
+                 if [ -n "${REBOOTSTRAP:-}" ]; then launchctl bootstrap "gui/$(id -u)" "$AGENT"; REBOOTSTRAP=
+                 else launchctl kickstart -k "gui/$(id -u)/dev.opennotch.app"; fi
+               else
+                 pkill -x OpenNotch 2>/dev/null || true
+                 while pgrep -x OpenNotch >/dev/null; do sleep 0.2; done
+                 open "$APP"          # first launch hands itself over to launchd
+               fi ;;
+    --dmg)     "$ROOT/scripts/make-dmg.sh" "$BUILD/OpenNotch.app" "$BUILD/OpenNotch-$VERSION.dmg" ;;
+  esac
+done
+if [ -n "${REBOOTSTRAP:-}" ]; then launchctl bootstrap "gui/$(id -u)" "$AGENT"; fi

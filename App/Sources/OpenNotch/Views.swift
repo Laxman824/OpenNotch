@@ -1,0 +1,1381 @@
+import AppKit
+import SwiftUI
+import UniformTypeIdentifiers
+
+// MARK: - Look & feel
+
+enum Theme {
+    static let glow: [Color] = [
+        Color(red: 0.36, green: 0.55, blue: 1.00),
+        Color(red: 0.69, green: 0.40, blue: 1.00),
+        Color(red: 1.00, green: 0.40, blue: 0.67),
+        Color(red: 1.00, green: 0.62, blue: 0.30),
+        Color(red: 0.36, green: 0.55, blue: 1.00),
+    ]
+    static let userBubble = LinearGradient(
+        colors: [Color(red: 0.23, green: 0.42, blue: 1.0), Color(red: 0.45, green: 0.30, blue: 0.95)],
+        startPoint: .topLeading, endPoint: .bottomTrailing)
+    static let panel = Color(white: 0.035)
+    static let hairline = Color.white.opacity(0.08)
+    static let secondary = Color.white.opacity(0.55)
+    static let tertiary = Color.white.opacity(0.35)
+}
+
+/// Black shape hanging from the top edge: square top (it merges into the bezel
+/// and the real notch), rounded bottom corners.
+struct NotchShape: Shape {
+    var radius: CGFloat
+    var animatableData: CGFloat {
+        get { radius }
+        set { radius = newValue }
+    }
+
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        let rad = min(radius, r.height / 2, r.width / 2)
+        p.move(to: CGPoint(x: r.minX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY - rad))
+        p.addQuadCurve(to: CGPoint(x: r.maxX - rad, y: r.maxY), control: CGPoint(x: r.maxX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX + rad, y: r.maxY))
+        p.addQuadCurve(to: CGPoint(x: r.minX, y: r.maxY - rad), control: CGPoint(x: r.minX, y: r.maxY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// The Ledge "orb" — a rotating angular gradient. Spins while working.
+struct Orb: View {
+    var size: CGFloat = 14
+    var active: Bool
+    @State private var angle: Double = 0
+
+    var body: some View {
+        Circle()
+            .fill(AngularGradient(colors: Theme.glow, center: .center, angle: .degrees(angle)))
+            .frame(width: size, height: size)
+            .overlay(Circle().fill(.white.opacity(0.25)).frame(width: size * 0.35).blur(radius: size * 0.12)
+                .offset(x: -size * 0.15, y: -size * 0.15))
+            .shadow(color: Theme.glow[1].opacity(active ? 0.8 : 0.3), radius: active ? size * 0.6 : size * 0.25)
+            .scaleEffect(active ? 1.0 : 0.92)
+            .onAppear { spin() }
+            .onChange(of: active) { _ in spin() }
+    }
+
+    private func spin() {
+        guard active else { return }
+        withAnimation(.linear(duration: 2.2).repeatForever(autoreverses: false)) { angle += 360 }
+    }
+}
+
+/// Apple-Intelligence-style glow that runs round the panel edge while busy.
+struct GlowBorder: View {
+    var radius: CGFloat
+    /// 0…1. Fixed at 1 while a turn runs; follows the voice in hands-free.
+    var intensity: CGFloat = 1
+    @State private var angle: Double = 0
+
+    var body: some View {
+        let gradient = AngularGradient(colors: Theme.glow, center: .center, angle: .degrees(angle))
+        let k = max(0.25, min(1, intensity))
+        ZStack {
+            NotchShape(radius: radius).stroke(gradient, lineWidth: 1.5 + 1.5 * k)
+            NotchShape(radius: radius).stroke(gradient, lineWidth: 4 + 8 * k).blur(radius: 8 + 6 * k).opacity(0.35 + 0.5 * k)
+        }
+        .animation(.easeOut(duration: 0.12), value: k)
+        .onAppear {
+            withAnimation(.linear(duration: 3.5).repeatForever(autoreverses: false)) { angle = 360 }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Root
+
+struct RootView: View {
+    @ObservedObject var backend: Backend
+    @ObservedObject var notch: NotchController
+    @ObservedObject var dictation: Dictation
+    @ObservedObject var hub: Hub
+    @ObservedObject var handsFree: HandsFree
+    @State private var dropTargeted = false
+
+    private var radius: CGFloat {
+        switch notch.mode {
+        case .collapsed: return 10
+        case .hello: return 12
+        case .peek, .alert: return 18
+        case .player: return 24
+        case .mirror: return 22
+        case .expanded: return 26
+        }
+    }
+
+    private var isTucked: Bool { notch.mode == .collapsed || notch.mode == .hello }
+    private var isOpen: Bool { notch.mode == .expanded }
+
+    private var voiceGlow: Color {
+        switch handsFree.waveMode {
+        case .listening: return Color(red: 0.25, green: 0.8, blue: 1.0)
+        case .speaking: return Color(red: 0.85, green: 0.4, blue: 1.0)
+        case .thinking: return Theme.glow[1]
+        case .idle: return Theme.glow[0].opacity(0.5)
+        }
+    }
+
+    var body: some View {
+        let size = notch.visibleSize
+        ZStack(alignment: .top) {
+            ZStack {
+                NotchShape(radius: radius).fill(isTucked ? Color.black : Theme.panel)
+                if !isTucked {
+                    NotchShape(radius: radius)
+                        .stroke(dropTargeted ? Theme.glow[0] : Theme.hairline, lineWidth: dropTargeted ? 2 : 1)
+                }
+                if handsFree.isOn && !isTucked {
+                    GlowBorder(radius: radius, intensity: handsFree.phase == .thinking ? 0.6 : handsFree.waveLevel * 1.6)
+                } else if backend.busy && notch.mode != .collapsed {
+                    GlowBorder(radius: radius)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            // Fixed radius, animated opacity only: re-blurring a changing
+            // radius every frame is what made the old open stutter.
+            .shadow(color: .black.opacity(isTucked ? 0 : 0.55), radius: 24, y: 10)
+            // Hands-free with the notch closed: a Siri-like glow breathes
+            // out from under the notch with the voice.
+            .shadow(color: voiceGlow.opacity(isTucked && handsFree.isOn ? 0.35 + 0.65 * Double(min(1, handsFree.waveLevel * 1.5)) : 0),
+                    radius: isTucked && handsFree.isOn ? 6 + 16 * min(1, handsFree.waveLevel * 1.5) : 0, y: 3)
+            .animation(.easeOut(duration: 0.12), value: handsFree.waveLevel)
+
+            // Small states are tiny — rebuilt per mode with a quick cross-fade.
+            ZStack(alignment: .top) {
+                switch notch.mode {
+                case .collapsed: CollapsedView(backend: backend, notch: notch, hub: hub, timers: hub.timers,
+                                               handsFree: handsFree)
+                case .hello: HelloView(notch: notch, backend: backend)
+                case .peek: PeekView(backend: backend, notch: notch)
+                case .player: PlayerView(backend: backend, notch: notch)
+                case .mirror: MirrorView(notch: notch)
+                case .alert: AlertPeek(alert: notch.alert ?? .hydration, backend: backend, notch: notch,
+                                       drank: { hub.timers.drank() })
+                case .expanded: Color.clear
+                }
+            }
+            .id(notch.mode == .expanded ? NotchMode.collapsed : notch.mode)
+            .transition(.opacity.animation(.easeOut(duration: 0.14)))
+            .frame(width: size.width, height: size.height, alignment: .top)
+            .clipShape(NotchShape(radius: radius))
+
+            // The panel is built once (pre-warmed just after launch), laid out
+            // at its full size, and *revealed* by the growing notch shape —
+            // like the Dynamic Island. No view construction and no text
+            // reflow happens during the animation, which is what keeps it smooth.
+            if notch.panelWarm {
+                ExpandedView(backend: backend, notch: notch, dictation: dictation, hub: hub,
+                             handsFree: handsFree, isOpen: isOpen)
+                    .frame(width: notch.expandedSize.width, height: notch.expandedSize.height, alignment: .top)
+                    .opacity(isOpen ? 1 : 0)
+                    .animation(isOpen ? Motion.contentIn : Motion.contentOut, value: isOpen)
+                    .allowsHitTesting(isOpen)
+                    .environment(\.notchContentVisible, isOpen && notch.contentLive)
+                    .mask(alignment: .top) {
+                        NotchShape(radius: radius).frame(width: size.width, height: size.height)
+                    }
+            }
+        }
+        .animation(Motion.open, value: backend.busy)
+        .animation(Motion.open, value: backend.approvals.isEmpty)
+        .animation(Motion.open, value: notch.hasLiveActivity)
+        .animation(Motion.open, value: notch.earWidth)
+        .frame(width: notch.windowSize.width, height: notch.windowSize.height, alignment: .top)
+        .preferredColorScheme(.dark)
+        .environment(\.colorScheme, .dark)
+        .overlay(alignment: .top) {
+            // Mid-drag: choose where the file goes. Falls through to the chat
+            // if dropped outside the zones.
+            if notch.fileDrag && notch.mode == .expanded {
+                DropZones(hub: hub, backend: backend, notch: notch)
+                    .frame(width: notch.expandedSize.width - 2, height: notch.expandedSize.height - 60)
+                    .clipShape(RoundedRectangle(cornerRadius: 22))
+                    .padding(.top, 50)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: notch.fileDrag)
+        .onDrop(of: [.fileURL, .url], isTargeted: $dropTargeted) { providers in
+            loadURLs(providers) { urls in
+                backend.attachDropped(urls)
+                hub.module = .chat
+                notch.expand(pinned: true, focus: true)
+            }
+            return true
+        }
+    }
+}
+
+/// Launch greeting: orb in the left ear, "Ledge" in the right.
+struct HelloView: View {
+    @ObservedObject var notch: NotchController
+    @ObservedObject var backend: Backend
+    @AppStorage("assistantName") private var assistantName = "Ledge"
+    @State private var shown = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            HStack { Spacer(); AssistantFace(size: 24, backend: backend); Spacer() }
+                .frame(width: 85)
+                .scaleEffect(shown ? 1 : 0.3)
+                .opacity(shown ? 1 : 0)
+            Spacer().frame(width: notch.notchSize.width)
+            Text(assistantName)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .foregroundStyle(LinearGradient(colors: [Theme.glow[0], Theme.glow[1], Theme.glow[2]],
+                                                startPoint: .leading, endPoint: .trailing))
+                .frame(width: 85)
+                .offset(x: shown ? 0 : -10)
+                .opacity(shown ? 1 : 0)
+        }
+        .frame(height: notch.notchSize.height)
+        .onAppear {
+            withAnimation(Motion.open.delay(0.12)) { shown = true }
+        }
+    }
+}
+
+struct AppMenu: View {
+    @ObservedObject var backend: Backend
+    @EnvironmentObject var hub: Hub
+    @EnvironmentObject var handsFree: HandsFree
+    @State private var keepRunning = !Supervisor.disabled && Supervisor.installed
+    @AppStorage("avatarPalette") private var paletteID = "aurora"
+    @AppStorage("assistantName") private var assistantName = "Ledge"
+    @AppStorage("handsfree.autostart") private var handsFreeAtLaunch = false
+
+    private func renameAssistant() {
+        let alert = NSAlert()
+        alert.messageText = "Name your assistant"
+        alert.informativeText = "Shown in the notch and the greeting."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        field.stringValue = assistantName
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty { assistantName = String(name.prefix(20)); VoiceTurn.wakeName = assistantName }
+        }
+    }
+
+    var body: some View {
+        Button("Settings…") { SettingsWindow.shared.show() }
+        Menu(KeepAwake.shared.isOn ? "☕ Keeping awake" : "Keep awake") {
+            Button("For 30 minutes") { KeepAwake.shared.start(minutes: 30) }
+            Button("For 1 hour") { KeepAwake.shared.start(minutes: 60) }
+            Button("For 2 hours") { KeepAwake.shared.start(minutes: 120) }
+            Button("Until I turn it off") { KeepAwake.shared.start(minutes: nil) }
+            if KeepAwake.shared.isOn { Divider(); Button("Stop — sleep as usual") { KeepAwake.shared.stop() } }
+        }
+        Button("Camera mirror") { (NSApp.delegate as? AppDelegate)?.notch.openMirror() }
+        Button("New chat") { backend.newChat() }
+        Button(handsFree.isOn ? "End hands-free  ⌥⇧Space" : "Hands-free mode  ⌥⇧Space") { handsFree.toggle() }
+        Button((DesktopCompanion.enabled ? "✓ " : "   ") + "Desktop Ledge (wanders your screen)") {
+            (NSApp.delegate as? AppDelegate)?.desktop.setEnabled(!DesktopCompanion.enabled)
+        }
+        Menu("Desktop avatar") {
+            ForEach([("ledge", "Ledge (hoodie)"), ("bee", "Bee"), ("cat", "Cat (hoodie + glasses)")], id: \.0) { id, label in
+                Button((DesktopCompanion.avatar == id ? "✓ " : "   ") + label) {
+                    (NSApp.delegate as? AppDelegate)?.desktop.setAvatar(id)
+                }
+            }
+        }
+        Button((handsFreeAtLaunch ? "✓ " : "") + "Start hands-free at launch") { handsFreeAtLaunch.toggle() }
+        Menu("Modules") {
+            ForEach(Module.allCases.filter { $0 != .chat }) { m in
+                Button((hub.disabled.contains(m.rawValue) ? "   " : "✓ ") + m.title) { hub.toggle(m) }
+            }
+        }
+        Menu("Proactive") {
+            Button((hub.proactive.briefOn ? "✓ " : "   ") + "Morning brief (\(hub.proactive.briefHour):00)") { hub.proactive.briefOn.toggle() }
+            Menu("Brief time") {
+                ForEach([6, 7, 8, 9, 10], id: \.self) { h in
+                    Button((hub.proactive.briefHour == h ? "✓ " : "   ") + "\(h):00") { hub.proactive.briefHour = h }
+                }
+            }
+            Button((hub.proactive.meetingsOn ? "✓ " : "   ") + "Meeting heads-up (10 min before)") { hub.proactive.meetingsOn.toggle() }
+            Divider()
+            Button("Brief me now") { hub.proactive.briefNow() }
+            Button(hub.proactive.paused ? "Resume suggestions" : "Pause all suggestions") { hub.proactive.paused.toggle() }
+        }
+        Button("AI & models…") { SettingsWindow.shared.show(.ai) }
+        Menu("Avatar") {
+            ForEach(AvatarPalette.all) { pal in
+                Button((paletteID == pal.id ? "✓ " : "") + pal.name) { paletteID = pal.id }
+            }
+            Divider()
+            Button("Rename assistant…") { renameAssistant() }
+        }
+        Divider()
+        Button((keepRunning ? "✓ " : "") + "Keep OpenNotch running (restart on crash, start at login)") {
+            if keepRunning {
+                Supervisor.disabled = true
+                Supervisor.uninstall()
+            } else {
+                Supervisor.disabled = false
+                if !Supervisor.canSupervise {
+                    backend.notice("Install to ~/Applications first (scripts/build.sh --install).")
+                } else if Supervisor.writePlist() {
+                    (NSApp.delegate as? AppDelegate)?.prepareForExit()
+                    Supervisor.handOverAndExit()     // comes straight back, now supervised
+                }
+            }
+            keepRunning = !Supervisor.disabled && Supervisor.installed
+        }
+        Button("Open app log") { NSWorkspace.shared.open(URL(fileURLWithPath: AppLog.path)) }
+        Button("Show my data folder") { NSWorkspace.shared.open(URL(fileURLWithPath: AppPaths.root)) }
+        Divider()
+        Button("Quit OpenNotch") { NSApp.terminate(nil) }
+    }
+}
+
+// MARK: - Collapsed
+
+struct CollapsedView: View {
+    @ObservedObject private var policy = AnimationPolicy.shared
+    @ObservedObject var backend: Backend
+    @ObservedObject var notch: NotchController
+    @ObservedObject var hub: Hub
+    @ObservedObject var timers: TimerStore
+    @ObservedObject var handsFree: HandsFree
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if notch.hasLiveActivity {
+                let ear = notch.earWidth
+                switch notch.earActivity {
+                case .hud:
+                    if let h = notch.hud {
+                        HStack { Spacer(); HUDLeftEar(hud: h) }.padding(.trailing, 14).frame(width: ear)
+                        Spacer().frame(width: notch.notchSize.width)
+                        HUDRightEar(hud: h).frame(width: ear)
+                    }
+                case .timer:
+                    TimerRingEar(timers: timers).frame(width: ear)
+                    Spacer().frame(width: notch.notchSize.width)
+                    TimerClockEar(timers: timers).frame(width: ear)
+                case .awake:
+                    AwakeEars(side: false).frame(width: ear)
+                    Spacer().frame(width: notch.notchSize.width)
+                    AwakeEars(side: true).frame(width: ear)
+                case .music:
+                    // One wave across the whole width, from the art to the title — the
+                    // stretch behind the camera is simply hidden, so it reads as one
+                    // ribbon passing behind the notch.
+                    let art: CGFloat = 22, artPad: CGFloat = 12, titleW = ear - 30
+                    TimelineView(.animation(minimumInterval: 1.0 / policy.fps)) { ctx in
+                        ZStack {
+                            MusicWave(backend: backend, date: ctx.date)
+                                .padding(.leading, artPad + art + 6)
+                                .padding(.trailing, titleW + 12)
+                            HStack(spacing: 0) {
+                                MusicArtEar(backend: backend, date: ctx.date, size: art)
+                                    .padding(.leading, artPad)
+                                Spacer()
+                                MusicInfoEar(backend: backend, date: ctx.date)
+                                    .frame(width: titleW)
+                                    .padding(.trailing, 12)
+                            }
+                        }
+                        .frame(width: notch.notchSize.width + 2 * ear, height: notch.notchSize.height)
+                    }
+                default:
+                    left.frame(width: ear)
+                    Spacer().frame(width: notch.notchSize.width)
+                    right
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                        .frame(width: ear)
+                        .contentTransition(.numericText())
+                }
+            }
+        }
+        .transition(.opacity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(spokenStatus)
+        .animation(.easeOut(duration: 0.25), value: notch.earActivity)
+        .frame(height: notch.notchSize.height)
+        .contextMenu { AppMenu(backend: backend) }
+    }
+
+    /// What VoiceOver reads for the closed notch.
+    private var spokenStatus: String {
+        switch notch.earActivity {
+        case .hud:
+            switch notch.hud {
+            case .volume(let l, let m)?: return m ? "Muted" : "Volume \(Int((l * 100).rounded())) percent"
+            case .device(let n, _, let b)?: return "Connected \(n)" + (b.map { ", battery \($0)" } ?? "")
+            case .power(let c, let p, let pct)?: return (p ? (c ? "Charging" : "Plugged in") : "On battery") + ", \(pct) percent"
+            case .health(_, let t, let d, _)?: return "\(t). \(d)"
+            case .awake(let on, let label)?: return on ? "Keeping your Mac awake, \(label)" : "Keep awake off"
+            case nil: return ""
+            }
+        case .timer:
+            return "\(timers.kind?.rawValue ?? "Timer")\(timers.onBreak ? " break" : ""), \(TimerStore.clock(timers.remaining))\(timers.kind == .stopwatch ? " elapsed" : " left")\(timers.paused ? ", paused" : "")"
+        case .music:
+            let np = backend.nowPlaying
+            return "Now playing \(np.track)" + (np.artist.isEmpty ? "" : " by \(np.artist)")
+        case .agent:
+            return !backend.approvals.isEmpty ? "Ledge needs your approval" : backend.busy ? "Ledge is working" : "Hands-free on"
+        case .awake:
+            return "Keeping your Mac awake, " + HealthLogic.awakeLabel(until: KeepAwake.shared.until)
+                .replacingOccurrences(of: "∞", with: "until you stop it")
+        case .none:
+            return "Ledge"
+        }
+    }
+
+    /// Left ear while Ledge is involved: the face.
+    @ViewBuilder private var left: some View {
+        AssistantFace(size: 22, backend: backend, tracksCursor: false)
+    }
+
+    /// Right ear while Ledge is involved: one word of status, highest priority first.
+    @ViewBuilder private var right: some View {
+        if !backend.approvals.isEmpty {
+            Text("Approve").foregroundStyle(.yellow)
+        } else if backend.busy {
+            Text(backend.lastTool.isEmpty ? "Thinking" : backend.lastTool).foregroundStyle(.white.opacity(0.75))
+        } else if handsFree.isOn {
+            if handsFree.phase == .standby || handsFree.phase == .starting {
+                Text(handsFreeLabel).foregroundStyle(Theme.secondary)
+            } else {
+                SiriWave(mode: handsFree.waveMode, level: handsFree.waveLevel, ribbons: 3)
+                    .frame(width: 56, height: 22)
+            }
+        }
+    }
+
+    private var handsFreeLabel: String {
+        switch handsFree.phase {
+        case .listening: return "Listening"
+        case .hearing: return "Hearing…"
+        case .thinking: return "Thinking"
+        case .speaking: return "Speaking"
+        case .standby: return "“Ledge”"
+        case .starting: return "Starting"
+        case .off: return ""
+        }
+    }
+}
+
+// MARK: - Peek
+
+struct PeekView: View {
+    @ObservedObject var backend: Backend
+    @ObservedObject var notch: NotchController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer().frame(height: notch.notchSize.height + 6)
+            HStack(alignment: .top, spacing: 10) {
+                AssistantFace(size: 26, backend: backend, tracksCursor: false)
+                Text(inlineMD(backend.lastAnswer.replacingOccurrences(of: "\n", with: " ")))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { notch.expand(pinned: true, focus: true) }
+    }
+}
+
+// MARK: - Expanded
+
+struct QuickAction: Identifiable {
+    let id = UUID()
+    let icon: String
+    let title: String
+    let prompt: String
+    var screenshot = false
+    var clipboard = false
+}
+
+let quickActions: [QuickAction] = [
+    QuickAction(icon: "sun.max", title: "Plan my day",
+                prompt: "Help me plan today: ask what's on my plate if you can't see my calendar, then give me a short, focused plan."),
+    QuickAction(icon: "camera.viewfinder", title: "Explain my screen",
+                prompt: "What's on my screen? Explain it briefly and suggest the next step.", screenshot: true),
+    QuickAction(icon: "doc.on.clipboard", title: "Work on clipboard",
+                prompt: "Explain what's in my clipboard, then improve or fix it.", clipboard: true),
+    QuickAction(icon: "arrowshape.turn.up.left", title: "Draft a reply",
+                prompt: "Draft a friendly, concise reply to the message in my clipboard. Match its language and tone.", clipboard: true),
+    QuickAction(icon: "text.badge.checkmark", title: "Summarise clipboard",
+                prompt: "Summarise what's in my clipboard in a few bullet points, then list any action items.", clipboard: true),
+    QuickAction(icon: "lightbulb", title: "Brainstorm",
+                prompt: "Let's brainstorm. Ask me one short question about what I'm working on, then give me ideas."),
+]
+
+struct ExpandedView: View {
+    @ObservedObject var backend: Backend
+    @ObservedObject var notch: NotchController
+    @ObservedObject var dictation: Dictation
+    @ObservedObject var hub: Hub
+    @ObservedObject var handsFree: HandsFree
+    /// Mounted permanently; this says whether it's actually on screen.
+    let isOpen: Bool
+    @State private var draft = ""
+    @State private var recallIndex: Int? = nil
+    @FocusState private var inputFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Header(backend: backend, notch: notch, handsFree: handsFree)
+                .modifier(Cascade(shown: isOpen, step: 0))
+            ModuleBar(hub: hub)
+                .modifier(Cascade(shown: isOpen, step: 1))
+            Group {
+                if hub.module != .chat {
+                    ModuleHost(hub: hub, backend: backend, notch: notch)
+                } else if handsFree.isOn {
+                    HandsFreeStage(handsFree: handsFree, backend: backend)
+                } else {
+                    Transcript(backend: backend, run: run)
+                }
+            }
+            .modifier(Cascade(shown: isOpen, step: 2))
+            // Writing tools for whatever text was selected when the notch opened.
+            // (The card observes the context itself and shows only with a selection —
+            // a nested ObservableObject wouldn't re-render this view.)
+            if hub.module == .chat && !handsFree.isOn && !backend.busy {
+                WritingToolsCard(model: hub.context)
+            }
+            if !backend.approvals.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(backend.approvals) { ApprovalCard(approval: $0, backend: backend) }
+                }
+                .padding(.horizontal, 14).padding(.top, 6)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            if hub.module == .chat && !handsFree.isOn {
+                composer
+                    .modifier(Cascade(shown: isOpen, step: 3))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: backend.approvals)
+        .onAppear { if isOpen && notch.focusInput { focusSoon() } }
+        .onChange(of: isOpen) { open in
+            if open { if notch.focusInput { focusSoon() } } else { inputFocused = false }
+        }
+        .overlay(alignment: .top) {
+            if notch.showPalette {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.45).onTapGesture { closePalette() }
+                    CommandPalette(items: paletteItems, onAsk: { q in
+                        hub.module = .chat
+                        backend.send(q)
+                    }, onAttachFile: { path in
+                        backend.attach(Attachment(kind: .file, value: path))
+                        hub.module = .chat
+                        focusSoon()
+                    }, close: closePalette)
+                    .padding(.top, 56)
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+            }
+        }
+        .onChange(of: isOpen) { open in if !open { notch.showPalette = false } }
+        .onChange(of: notch.focusInput) { v in if v { focusSoon() } }
+        .onChange(of: inputFocused) { v in if v { notch.pinned = true } }
+        .onChange(of: dictation.transcript) { t in if dictation.listening { draft = t } }
+        .onExitCommand {
+            if handsFree.phase == .speaking { handsFree.interrupt() } else { notch.collapse() }
+        }
+        .background {
+            // Invisible buttons that carry the app's keyboard shortcuts.
+            Group {
+                Button("") { backend.newChat() }.keyboardShortcut("n", modifiers: .command)
+                Button("") { backend.stop() }.keyboardShortcut(".", modifiers: .command)
+                Button("") { notch.pinned.toggle() }.keyboardShortcut("p", modifiers: .command)
+                Button("") { SettingsWindow.shared.show() }.keyboardShortcut(",", modifiers: .command)
+                Button("") { withAnimation(.spring(duration: 0.25, bounce: 0.15)) { notch.showPalette.toggle() } }
+                    .keyboardShortcut("k", modifiers: .command)
+            }
+            .opacity(0).allowsHitTesting(false)
+            .disabled(!isOpen)                      // no ⌘N / ⌘. while the notch is closed
+        }
+    }
+
+    private func closePalette() {
+        withAnimation(.easeOut(duration: 0.15)) { notch.showPalette = false }
+    }
+
+    /// Everything ⌘K can do, in the order shown before you type.
+    private var paletteItems: [PaletteItem] {
+        let app = NSApp.delegate as? AppDelegate
+        let t = hub.timers
+        var items: [PaletteItem] = [
+            PaletteItem(id: "new", group: .action, icon: "square.and.pencil", title: "New chat", subtitle: "⌘N") {
+                backend.newChat(); hub.module = .chat },
+            PaletteItem(id: "hf", group: .action, icon: "waveform.circle", title: handsFree.isOn ? "End hands-free" : "Hands-free mode",
+                        subtitle: "⌥⇧Space", keywords: "voice talk speak") { handsFree.toggle() },
+            PaletteItem(id: "settings", group: .action, icon: "gearshape", title: "Settings", subtitle: "⌘,", keywords: "preferences") {
+                SettingsWindow.shared.show() },
+            PaletteItem(id: "perms", group: .action, icon: "lock.shield", title: "Permissions checklist", keywords: "privacy allow") {
+                SettingsWindow.shared.show(.permissions) },
+            PaletteItem(id: "clip", group: .action, icon: "doc.on.clipboard", title: "Paste clipboard as context") {
+                hub.module = .chat; backend.attachClipboard(); focusSoon() },
+            PaletteItem(id: "focus", group: .action, icon: "brain.head.profile", title: "Start a focus session",
+                        subtitle: "\(t.focusMinutes) min", keywords: "pomodoro timer") { t.startPomodoro() },
+            PaletteItem(id: "t5", group: .action, icon: "timer", title: "5-minute timer", keywords: "countdown") {
+                t.startCountdown(seconds: 300) },
+            PaletteItem(id: "sw", group: .action, icon: "stopwatch", title: "Stopwatch") { t.startStopwatch() },
+            PaletteItem(id: "play", group: .action, icon: backend.nowPlaying.playing ? "pause.fill" : "play.fill",
+                        title: backend.nowPlaying.playing ? "Pause music" : "Play music", keywords: "spotify song") {
+                backend.media(backend.nowPlaying.playing ? "pause" : "play") },
+            PaletteItem(id: "next", group: .action, icon: "forward.fill", title: "Next song", keywords: "skip track music") {
+                backend.media("next") },
+            PaletteItem(id: "awake", group: .action, icon: "cup.and.saucer",
+                        title: KeepAwake.shared.isOn ? "Stop keeping awake" : "Keep awake — until I turn it off",
+                        keywords: "caffeinate sleep display amphetamine") { KeepAwake.shared.toggle() },
+            PaletteItem(id: "awake1h", group: .action, icon: "cup.and.saucer", title: "Keep awake for 1 hour",
+                        keywords: "caffeinate sleep") { KeepAwake.shared.start(minutes: 60) },
+            PaletteItem(id: "mirror", group: .action, icon: "web.camera", title: "Camera mirror",
+                        subtitle: "Check yourself before a call", keywords: "camera selfie video call facetime zoom") {
+                notch.collapse()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { notch.openMirror() } },
+            PaletteItem(id: "desk", group: .action, icon: "figure.wave",
+                        title: DesktopCompanion.enabled ? "Hide Desktop Ledge" : "Show Desktop Ledge", keywords: "avatar companion") {
+                app?.desktop.setEnabled(!DesktopCompanion.enabled) },
+        ]
+        if t.kind != nil {
+            items.insert(PaletteItem(id: "tstop", group: .action, icon: "xmark.circle", title: "Stop the timer") { t.reset() }, at: 0)
+        }
+        if backend.busy {
+            items.insert(PaletteItem(id: "stop", group: .action, icon: "stop.circle", title: "Stop the running task", subtitle: "⌘.") {
+                backend.stop() }, at: 0)
+        }
+        for (id, name) in DesktopCompanion.avatarNames where id != DesktopCompanion.avatar {
+            items.append(PaletteItem(id: "av-" + id, group: .action, icon: "person.crop.circle", title: "Desktop avatar: \(name)",
+                                     keywords: "switch character") { app?.desktop.setAvatar(id) })
+        }
+        items += Module.allCases.filter { !hub.disabled.contains($0.rawValue) }.map { m in
+            PaletteItem(id: "m-" + m.rawValue, group: .module, icon: m.icon, title: m.title, keywords: "open module") { hub.module = m }
+        }
+        items += quickActions.map { a in
+            PaletteItem(id: "q-" + a.title, group: .quick, icon: a.icon, title: a.title) { hub.module = .chat; run(a) }
+        }
+        var seen = Set<String>()
+        for p in backend.sentHistory.reversed() where seen.insert(p).inserted && seen.count <= 6 {
+            items.append(PaletteItem(id: "r-" + p, group: .recent, icon: "clock.arrow.circlepath",
+                                     title: String(p.prefix(80))) { hub.module = .chat; backend.send(p) })
+        }
+        return items
+    }
+
+    private func focusSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { inputFocused = true }
+    }
+
+    /// Runs a quick action: attaches what it needs, then sends.
+    private func run(_ a: QuickAction) {
+        Task { @MainActor in
+            if a.screenshot {
+                guard let path = await ScreenGrab.capture(hiding: notch.panel) else {
+                    backend.notice("Screen capture failed — allow OpenNotch in System Settings › Privacy › Screen Recording.")
+                    return
+                }
+                backend.attach(Attachment(kind: .screenshot, value: path))
+            }
+            if a.clipboard { backend.attachClipboard() }
+            backend.send(a.prompt)
+        }
+    }
+
+    private var composer: some View {
+        VStack(spacing: 6) {
+            ContextSuggestions(model: hub.context, backend: backend)
+            if !backend.attachments.isEmpty && draft.isEmpty && !backend.busy {
+                AttachmentSuggestions(backend: backend)
+            }
+            if !backend.attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(backend.attachments) { a in
+                            HStack(spacing: 5) {
+                                Image(systemName: a.icon).font(.system(size: 10))
+                                Text(a.label).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                                Button {
+                                    backend.attachments.removeAll { $0.id == a.id }
+                                } label: {
+                                    Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, 9).padding(.vertical, 5)
+                            .background(Capsule().fill(.white.opacity(0.1)))
+                            .overlay(Capsule().stroke(Theme.hairline))
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .transition(.opacity)
+            }
+
+            HStack(alignment: .bottom, spacing: 8) {
+                attachMenu
+                TextField(dictation.listening ? "Listening…" :
+                            backend.busy ? "Add to the running task…" : "Ask Ledge anything…",
+                          text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13.5))
+                    .lineLimit(1...6)
+                    .focused($inputFocused)
+                    .onSubmit(submit)
+                    .onKeyPress(.upArrow) { recall(-1) }
+                    .onKeyPress(.downArrow) { recall(1) }
+                    .padding(.vertical, 3)
+                talkButton
+                micButton
+                sendButton
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 16)
+                .stroke(inputFocused ? Color.white.opacity(0.22) : Theme.hairline, lineWidth: 1))
+        }
+        .padding(.horizontal, 14).padding(.bottom, 14).padding(.top, 6)
+    }
+
+    private var attachMenu: some View {
+        Menu {
+            Button { pickFiles() } label: { Label("Attach files…", systemImage: "paperclip") }
+            Button {
+                Task { @MainActor in
+                    if let p = await ScreenGrab.capture(hiding: notch.panel) {
+                        backend.attach(Attachment(kind: .screenshot, value: p))
+                    } else {
+                        backend.notice("Screen capture failed — allow OpenNotch in System Settings › Privacy › Screen Recording.")
+                    }
+                }
+            } label: { Label("Screenshot my screen", systemImage: "camera.viewfinder") }
+            Button { backend.attachClipboard() } label: { Label("Paste clipboard as context", systemImage: "doc.on.clipboard") }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.secondary)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(.white.opacity(0.08)))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Attach files, a screenshot or your clipboard")
+    }
+
+    /// Hands-free from the input bar: the "stop typing, just talk" button.
+    private var talkButton: some View {
+        Button { handsFree.start() } label: {
+            Image(systemName: "waveform.circle.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(LinearGradient(colors: [Theme.glow[0], Theme.glow[2]],
+                                                startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: 26, height: 26)
+        }
+        .buttonStyle(HoverLift())
+        .help("Hands-free — talk instead of typing (⌥⇧Space)")
+    }
+
+    private var micButton: some View {
+        Button { dictation.toggle() } label: {
+            ZStack {
+                if dictation.listening {
+                    Circle().fill(Color.red.opacity(0.25))
+                        .frame(width: 24 + dictation.level * 14, height: 24 + dictation.level * 14)
+                        .animation(.easeOut(duration: 0.08), value: dictation.level)
+                }
+                Image(systemName: dictation.listening ? "waveform" : "mic.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(dictation.listening ? .red : Theme.secondary)
+                    .symbolEffect(.variableColor.iterative, isActive: dictation.listening)
+            }
+            .frame(width: 26, height: 26)
+        }
+        .buttonStyle(.plain)
+        .help(dictation.listening ? "Stop and send" : "Dictate")
+    }
+
+    @ViewBuilder
+    private var sendButton: some View {
+        if backend.busy && draft.isEmpty {
+            Button { backend.stop() } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.black)
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(.white))
+            }
+            .buttonStyle(.plain)
+            .help("Stop (⌘.)")
+        } else {
+            let ready = !draft.isEmpty || !backend.attachments.isEmpty
+            Button(action: submit) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(ready ? .white : .white.opacity(0.35))
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(ready ? AnyShapeStyle(Theme.userBubble)
+                                                    : AnyShapeStyle(Color.white.opacity(0.08))))
+            }
+            .buttonStyle(.plain)
+            .disabled(!ready)
+            .help("Send (↩)")
+        }
+    }
+
+    private func recall(_ step: Int) -> KeyPress.Result {
+        let hist = backend.sentHistory
+        guard !hist.isEmpty, draft.isEmpty || recallIndex != nil else { return .ignored }
+        let next = (recallIndex ?? hist.count) + step
+        if next >= hist.count { recallIndex = nil; draft = ""; return .handled }
+        guard next >= 0 else { return .handled }
+        recallIndex = next
+        draft = hist[next]
+        return .handled
+    }
+
+    private func submit() {
+        if dictation.listening { dictation.stop(); return }
+        backend.send(draft)
+        draft = ""
+        recallIndex = nil
+    }
+
+    private func pickFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        notch.pinned = true
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK {
+            for url in panel.urls { backend.attach(Attachment(kind: .file, value: url.path)) }
+        }
+        notch.expand(pinned: true, focus: true)
+    }
+}
+
+/// Header, transcript, composer land one after another — a ~40ms cascade
+/// behind the shape, which is what makes the open read as one gesture.
+struct Cascade: ViewModifier {
+    let shown: Bool
+    let step: Int
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown ? 0 : -8 - CGFloat(step) * 2)
+            .animation(shown ? Motion.contentIn.delay(0.05 + Double(step) * 0.04) : Motion.contentOut, value: shown)
+    }
+}
+
+struct Header: View {
+    @ObservedObject var backend: Backend
+    @ObservedObject var notch: NotchController
+    @ObservedObject var handsFree: HandsFree
+    @AppStorage("assistantName") private var assistantName = "Ledge"
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                AssistantFace(size: 26, backend: backend)
+                Text(assistantName).font(.system(size: 13, weight: .bold, design: .rounded))
+                    .fixedSize()
+                    .layoutPriority(2)
+                modelMenu
+
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer().frame(width: notch.notchSize.width)
+
+            HStack(spacing: 14) {
+                HandsFreeSwitch(handsFree: handsFree)
+                iconButton("square.and.pencil", "New chat (⌘N)") { backend.newChat() }
+                iconButton(notch.pinned ? "pin.fill" : "pin", notch.pinned ? "Unpin (⌘P)" : "Keep open (⌘P)") {
+                    notch.pinned.toggle()
+                }
+                Menu { AppMenu(backend: backend) } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.secondary)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .frame(height: max(notch.notchSize.height, 32))
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, 14) }
+    }
+
+    private var modelMenu: some View {
+        Menu {
+            Button(backend.aiConnected ? "Switch AI or model…" : "Connect an AI…") { SettingsWindow.shared.show(.ai) }
+        } label: {
+            HStack(spacing: 3) {
+                Text(backend.model.isEmpty ? "Connect an AI" : shortModel(backend.model))
+                    .font(.system(size: 10.5, weight: .medium))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+            }
+            .foregroundStyle(Theme.secondary)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Capsule().fill(.white.opacity(0.08)))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Switch model")
+    }
+
+    private func iconButton(_ icon: String, _ help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
+// MARK: - Transcript
+
+struct Transcript: View {
+    @ObservedObject var backend: Backend
+    let run: (QuickAction) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if backend.items.isEmpty {
+                        EmptyState(backend: backend, run: run)
+                    }
+                    ForEach(backend.items) { ItemRow(item: $0) }
+                    if backend.busy, !(backend.items.last?.streaming ?? false) {
+                        WorkingRow(backend: backend, started: backend.turnStarted, tool: backend.lastTool)
+                    }
+                    Color.clear.frame(height: 1).id("bottom")
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+            }
+            .scrollIndicators(.never)
+            .onChange(of: backend.items) { _ in
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+}
+
+struct EmptyState: View {
+    @ObservedObject var backend: Backend
+    @EnvironmentObject var handsFree: HandsFree
+    @EnvironmentObject var hub: Hub
+    @AppStorage("assistantName") private var assistantName = "Ledge"
+    let run: (QuickAction) -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            ForYouSection(engine: hub.proactive)
+            HeroAvatar(proactive: hub.proactive, backend: backend)
+            VStack(spacing: 4) {
+                Text("Hi, I'm \(assistantName). What can I do for you?")
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                Text("⌥Space from anywhere · drop files on the notch · Esc to close")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.tertiary)
+            }
+            Button { handsFree.start() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform").font(.system(size: 13, weight: .bold))
+                    Text("Talk to \(assistantName)").font(.system(size: 13, weight: .semibold))
+                    Text("⌥⇧Space").font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.6))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(.white.opacity(0.15)))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18).padding(.vertical, 9)
+                .background(Capsule().fill(Theme.userBubble))
+                .shadow(color: Theme.glow[1].opacity(0.45), radius: 12, y: 3)
+            }
+            .buttonStyle(HoverLift())
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8),
+                                GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(quickActions) { a in
+                    Button { run(a) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Image(systemName: a.icon)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(LinearGradient(colors: [Theme.glow[0], Theme.glow[1]],
+                                                                startPoint: .topLeading, endPoint: .bottomTrailing))
+                            Text(a.title)
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(11)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.05)))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.hairline))
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(HoverLift())
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct HoverLift: ButtonStyle {
+    @State private var hover = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .brightness(hover ? 0.06 : 0)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: hover)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .onHover { hover = $0 }
+    }
+}
+
+struct WorkingRow: View {
+    @ObservedObject var backend: Backend
+    let started: Date?
+    let tool: String
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
+            HStack(spacing: 8) {
+                AssistantFace(size: 22, backend: backend, tracksCursor: false)
+                Text(tool.isEmpty ? "Thinking" : tool)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.secondary)
+                if let started {
+                    Text("\(Int(ctx.date.timeIntervalSince(started)))s")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(Theme.tertiary)
+                }
+            }
+        }
+    }
+}
+
+/// "nemotron-3-super-120b-a12b" → "nemotron-3-super" — the chip has ~110pt.
+func shortModel(_ m: String) -> String {
+    let parts = m.split(separator: "-")
+    var out = ""
+    for p in parts {
+        let next = out.isEmpty ? String(p) : out + "-" + p
+        if next.count > 16 { break }
+        out = next
+    }
+    return out.isEmpty ? String(m.prefix(16)) : out
+}
+
+/// SF Symbol for a tool's display verb (the loop reports verbs, not names).
+func toolSymbol(_ verb: String) -> String {
+    let v = verb.lowercased()
+    let table: [(String, String)] = [
+        ("read", "doc.text"), ("writ", "square.and.pencil"), ("edit", "pencil"), ("replac", "pencil"),
+        ("delet", "trash"), ("mov", "arrow.right.doc.on.clipboard"), ("cop", "doc.on.doc"),
+        ("search", "magnifyingglass"), ("find", "magnifyingglass"), ("grep", "magnifyingglass"),
+        ("explor", "folder"), ("list", "list.bullet"), ("tree", "folder"),
+        ("run", "terminal"), ("exec", "terminal"), ("test", "checkmark.seal"), ("command", "terminal"),
+        ("git", "arrow.triangle.branch"), ("mail", "envelope"), ("gmail", "envelope"), ("draft", "envelope"),
+        ("brows", "globe"), ("web", "globe"), ("http", "network"), ("fetch", "network"),
+        ("job", "briefcase"), ("appl", "briefcase"), ("schedul", "clock"), ("remember", "brain"),
+        ("memor", "brain"), ("recall", "brain"), ("telegram", "paperplane"), ("screen", "camera.viewfinder"),
+        ("image", "photo"), ("pdf", "doc.richtext"), ("agent", "person.2"), ("plan", "checklist"),
+        ("todo", "checklist"), ("python", "chevron.left.forwardslash.chevron.right"), ("outlin", "list.bullet.indent"),
+        ("meeting", "waveform"), ("ollama", "cpu"), ("process", "gearshape.2"), ("sql", "cylinder"),
+        ("json", "curlybraces"), ("clipboard", "doc.on.clipboard"), ("desktop", "macwindow"),
+    ]
+    return table.first { v.contains($0.0) }?.1 ?? "sparkle"
+}
+
+struct ItemRow: View {
+    let item: Item
+    @State private var hover = false
+
+    var body: some View {
+        switch item.kind {
+        case .user:
+            HStack {
+                Spacer(minLength: 70)
+                Text(item.text)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(Theme.userBubble))
+            }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        case .assistant:
+            VStack(alignment: .leading, spacing: 5) {
+                MarkdownView(text: item.text, streaming: item.streaming)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.93))
+                    .textSelection(.enabled)
+                    .lineSpacing(2)
+                HStack(spacing: 10) {
+                    if let meta = item.meta {
+                        Text(meta).font(.system(size: 10).monospacedDigit()).foregroundStyle(Theme.tertiary)
+                    }
+                    if hover && !item.streaming {
+                        Button { copyToClipboard(item.text) } label: {
+                            Label("Copy", systemImage: "doc.on.doc").font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.secondary)
+                    }
+                }
+                .frame(height: 12)
+            }
+            .onHover { hover = $0 }
+        case let .tool(state, _, verb, detail, error):
+            HStack(spacing: 7) {
+                ZStack {
+                    if state == "running" {
+                        ProgressView().controlSize(.mini).scaleEffect(0.8)
+                    } else {
+                        Image(systemName: toolSymbol(verb))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(state == "done" ? Theme.secondary : .red)
+                    }
+                }
+                .frame(width: 16, height: 16)
+                Text(verb).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white.opacity(0.75))
+                Text(error ?? detail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(error == nil ? Theme.tertiary : .red.opacity(0.85))
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                if state == "done" {
+                    Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.green.opacity(0.8))
+                }
+            }
+            .padding(.horizontal, 9).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
+        case .info:
+            Text(item.text)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.tertiary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .multilineTextAlignment(.center)
+        case .error:
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text(item.text).foregroundStyle(.white.opacity(0.85)).textSelection(.enabled)
+            }
+            .font(.system(size: 12))
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.1)))
+        }
+    }
+}
+
+struct ApprovalCard: View {
+    let approval: Approval
+    @ObservedObject var backend: Backend
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "hand.raised.fill").foregroundStyle(.yellow)
+                Text("Ledge wants to run").foregroundStyle(Theme.secondary)
+                Text(approval.tool).foregroundStyle(.white).fontWeight(.bold)
+            }
+            .font(.system(size: 12))
+            Text(approval.preview)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(5)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(0.35)))
+            HStack(spacing: 8) {
+                Spacer()
+                Button { backend.answer(approval, allow: false) } label: {
+                    Text("Deny").font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 6)
+                        .background(Capsule().fill(.white.opacity(0.1)))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                Button { backend.answer(approval, allow: true) } label: {
+                    Text("Approve").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
+                        .padding(.horizontal, 14).padding(.vertical, 6)
+                        .background(Capsule().fill(Color.green))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.yellow.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.yellow.opacity(0.3)))
+    }
+}
+
+// MARK: - Hands-free stage
+
+/// What the panel shows during a voice conversation: the face, what it heard,
+/// and what it's saying. The chat keeps the full record underneath.
+struct HandsFreeStage: View {
+    @ObservedObject var handsFree: HandsFree
+    @ObservedObject var backend: Backend
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Spacer(minLength: 6)
+            ZStack {
+                // Soft halo that breathes with whoever is talking.
+                Circle().fill(RadialGradient(colors: [haloColor.opacity(0.35), .clear], center: .center,
+                                             startRadius: 10, endRadius: 110))
+                    .frame(width: 200 + handsFree.waveLevel * 70, height: 200 + handsFree.waveLevel * 70)
+                    .blur(radius: 10)
+                    .animation(.easeOut(duration: 0.12), value: handsFree.waveLevel)
+                AssistantFace(size: 104, backend: backend)
+            }
+            .frame(height: 150)
+            SiriWave(mode: handsFree.waveMode, level: handsFree.waveLevel)
+                .frame(height: 74)
+                .padding(.horizontal, 60)
+                .animation(.easeInOut(duration: 0.4), value: handsFree.waveMode)
+            Text(caption)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(Theme.secondary)
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.2), value: caption)
+            Text(bodyText)
+                .font(.system(size: handsFree.transcript.isEmpty ? 13 : 16, weight: .medium))
+                .foregroundStyle(.white.opacity(handsFree.transcript.isEmpty ? 0.6 : 0.95))
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+                .padding(.horizontal, 40)
+                .frame(minHeight: 60, alignment: .top)
+            Spacer(minLength: 4)
+            HStack(spacing: 10) {
+                if handsFree.phase == .speaking {
+                    PillButton(label: "Stop talking", icon: "speaker.slash") { handsFree.interrupt() }
+                }
+                if backend.busy {
+                    PillButton(label: "Stop task", icon: "stop.fill") { backend.stop() }
+                }
+                PillButton(label: "End hands-free", icon: "xmark") { handsFree.stop(say: "Going quiet.") }
+            }
+            Text(handsFree.echoCancelling ? "Talk over me any time to interrupt · say “stop listening” to end"
+                                          : "Say “stop listening” to end · wear headphones to interrupt by voice")
+                .font(.system(size: 10.5)).foregroundStyle(Theme.tertiary)
+                .padding(.bottom, 14)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var haloColor: Color {
+        switch handsFree.waveMode {
+        case .listening: return Color(red: 0.25, green: 0.8, blue: 1.0)
+        case .speaking: return Color(red: 0.85, green: 0.4, blue: 1.0)
+        case .thinking: return Theme.glow[1]
+        case .idle: return Theme.glow[0]
+        }
+    }
+
+    private var caption: String {
+        switch handsFree.phase {
+        case .listening: return "Listening…"
+        case .hearing: return "Go on…"
+        case .thinking: return backend.lastTool.isEmpty ? "Thinking…" : backend.lastTool + "…"
+        case .speaking: return "Speaking"
+        case .standby: return "Say “Ledge” when you need me"
+        case .starting: return "Getting ready…"
+        case .off: return ""
+        }
+    }
+
+    private var bodyText: String {
+        if !handsFree.transcript.isEmpty { return "“\(handsFree.transcript)”" }
+        if handsFree.phase == .speaking || handsFree.phase == .thinking { return backend.lastAnswer.isEmpty ? "" : SpeechText.clean(String(backend.lastAnswer.prefix(220))) }
+        return "Try “what's on my calendar”, “play some music”, or “find my offer letter”."
+    }
+}
+
+// MARK: - Hands-free switch
+
+/// The header's on/off switch for hands-free: a real toggle, labeled, and
+/// alive while it's listening — so the mode is obvious at a glance.
+struct HandsFreeSwitch: View {
+    @ObservedObject var handsFree: HandsFree
+
+    var body: some View {
+        let on = handsFree.isOn
+        Button { handsFree.toggle() } label: {
+            HStack(spacing: 6) {
+                ZStack(alignment: on ? .trailing : .leading) {
+                    Capsule()
+                        .fill(on ? AnyShapeStyle(LinearGradient(colors: [Theme.glow[0], Theme.glow[2]],
+                                                                startPoint: .leading, endPoint: .trailing))
+                                 : AnyShapeStyle(Color.white.opacity(0.16)))
+                        .frame(width: 28, height: 16)
+                    Circle().fill(.white).frame(width: 12, height: 12).padding(2)
+                        .shadow(color: .black.opacity(0.3), radius: 1, y: 1)
+                }
+                Image(systemName: on ? "waveform" : "mic.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .symbolEffect(.variableColor.iterative,
+                                  isActive: handsFree.phase == .listening || handsFree.phase == .hearing)
+                Text(on ? label : "Talk").font(.system(size: 11, weight: .semibold))
+                    .contentTransition(.opacity)
+            }
+            .foregroundStyle(on ? .white : Theme.secondary)
+            .padding(.leading, 4).padding(.trailing, 9).padding(.vertical, 3)
+            .background(Capsule().fill(on ? Color.white.opacity(0.1) : Color.clear))
+            .overlay(Capsule().stroke(on ? Theme.glow[1].opacity(0.5) : Theme.hairline))
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: on)
+        }
+        .buttonStyle(.plain)
+        .help(on ? "Hands-free is on — click to turn off (⌥⇧Space)" : "Hands-free: just talk (⌥⇧Space)")
+    }
+
+    private var label: String {
+        switch handsFree.phase {
+        case .speaking: return "Speaking"
+        case .thinking: return "Thinking"
+        case .standby: return "Standby"
+        case .starting: return "Starting"
+        default: return "Listening"
+        }
+    }
+}
+
+/// Start-screen avatar: smaller when "For you" cards need the room.
+struct HeroAvatar: View {
+    @ObservedObject var proactive: ProactiveEngine
+    @ObservedObject var backend: Backend
+    var body: some View {
+        AssistantFace(size: proactive.proposals.isEmpty ? 86 : 60, backend: backend)
+            .padding(.top, 6)
+            .animation(.spring(duration: 0.35, bounce: 0.1), value: proactive.proposals.isEmpty)
+    }
+}

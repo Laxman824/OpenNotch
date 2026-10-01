@@ -1,0 +1,13 @@
+# Build output
+build/
+App/.build/
+*.dmg
+# macOS
+.DS_Store
+# Never commit signing material or secrets
+*.p12
+*.pem
+*.cer
+*.key
+.env
+.env.*

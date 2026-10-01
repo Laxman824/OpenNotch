@@ -1,0 +1,462 @@
+import AppKit
+import Foundation
+import SwiftUI
+
+/// One row in the notch transcript.
+struct Item: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case user
+        case assistant
+        case tool(state: String, icon: String, verb: String, detail: String, error: String?)
+        case info
+        case error
+    }
+    let id: String
+    var kind: Kind
+    var text: String
+    var streaming = false
+    var meta: String? = nil          // "3.2s · 4 tools · 1.2k tokens" under an answer
+}
+
+struct NowPlaying: Equatable {
+    var app: String? = nil
+    var state = "stopped"
+    var track = ""
+    var artist = ""
+    var album = ""
+    var position: Double = 0          // seconds, as of `at`
+    var duration: Double = 0          // seconds (0 = unknown)
+    var artworkURL: String? = nil     // Spotify
+    var artworkPath: String? = nil    // Apple Music (file written by media_control)
+    var at = Date()
+    var playing: Bool { state == "playing" }
+    var artKey: String? { artworkURL ?? artworkPath.map { "\($0)#\(track)|\(artist)" } }
+
+    /// Playback position now, interpolated between polls.
+    func livePosition(_ now: Date = Date()) -> Double {
+        let p = position + (playing ? now.timeIntervalSince(at) : 0)
+        return duration > 0 ? min(duration, max(0, p)) : max(0, p)
+    }
+    var progress: Double { duration > 0 ? livePosition() / duration : 0 }
+
+    static func == (a: NowPlaying, b: NowPlaying) -> Bool {
+        // Position drifts every poll; only a jump (seek) counts as a change.
+        a.app == b.app && a.state == b.state && a.track == b.track && a.artist == b.artist
+            && a.album == b.album && a.duration == b.duration && a.artKey == b.artKey
+            && abs(a.livePosition() - b.livePosition()) < 1.5
+    }
+
+    init() {}
+    init(_ d: [String: Any]) {
+        app = d["app"] as? String
+        state = d["state"] as? String ?? (d["success"] as? Bool == true && d["action"] as? String != "pause" ? "playing" : "paused")
+        track = d["track"] as? String ?? ""
+        artist = d["artist"] as? String ?? ""
+        album = d["album"] as? String ?? ""
+        position = d["position"] as? Double ?? 0
+        duration = d["duration"] as? Double ?? 0
+        artworkURL = (d["artwork_url"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        artworkPath = (d["artwork_path"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+}
+
+/// Something the user attached to the next prompt.
+struct Attachment: Identifiable, Equatable {
+    enum Kind: Equatable { case file, screenshot, clipboard, selection, web }
+    let id = UUID()
+    let kind: Kind
+    let value: String                // path, or the clipboard text
+
+    var label: String {
+        switch kind {
+        case .file, .screenshot: return (value as NSString).lastPathComponent
+        case .clipboard: return "Clipboard · \(value.count) chars"
+        case .selection: return "Selected text · \(value.count) chars"
+        case .web: return value.components(separatedBy: "\n").first.map { String($0.prefix(40)) } ?? "Web page"
+        }
+    }
+    var icon: String {
+        switch kind {
+        case .file: return "doc"
+        case .screenshot: return "camera.viewfinder"
+        case .clipboard: return "doc.on.clipboard"
+        case .selection: return "text.cursor"
+        case .web: return "safari"
+        }
+    }
+}
+
+struct Approval: Identifiable, Equatable {
+    let id: String
+    let tool: String
+    let preview: String
+}
+
+/// The UI's view of the assistant: transcript, busy state, approvals,
+/// attachments and now-playing. The agent itself runs in-process
+/// (`AgentCore`); its events arrive through `handle(_:)`.
+@MainActor
+final class Backend: ObservableObject {
+    @Published var items: [Item] = []
+    @Published var approvals: [Approval] = []
+    @Published var busy = false
+    @Published var provider = ""
+    @Published var model = ""
+    @Published var connected = true             // the agent is in-process: always reachable
+    @Published var lastTool: String = ""
+    @Published var lastAnswer: String = ""
+    @Published var attachments: [Attachment] = []
+    @Published var turnStarted: Date? = nil
+    // For the avatar's moods.
+    var lastTextAt: Date? = nil
+    var lastDoneAt: Date? = nil
+    var lastErrorAt: Date? = nil
+    @Published var listening = false
+    @Published var micLevel: CGFloat = 0
+    @Published var handsFree = false
+    // Mirrored from HandsFree for the avatar (plain vars: read every frame, no re-render storm).
+    var voicePhase: HandsFree.Phase = .off
+    var speechLevel: CGFloat = 0
+    @Published var nowPlaying = NowPlaying() {
+        didSet { if nowPlaying.artKey != oldValue.artKey { loadArtwork(nowPlaying) } }
+    }
+    /// Album art of the current track and a vivid colour pulled from it
+    /// (tints the closed notch's music ears, like the Dynamic Island).
+    @Published var artwork: NSImage? = nil
+    @Published var artworkTint: Color? = nil
+    private var artworkTask: Task<Void, Never>?
+
+    /// Streamed answer text (hands-free speaks it as it arrives).
+    var onTextDelta: ((String) -> Void)?
+    /// (final text, whether any of it was streamed first)
+    var onTurnFinished: ((String, Bool) -> Void)?
+    /// A tool began running (verb = tool label) — hands-free narrates it.
+    var onToolStarted: ((String) -> Void)?
+
+    private(set) var sentHistory: [String] = []
+    /// Fired when a turn finishes, so the notch can "peek" the answer.
+    var onDone: ((String) -> Void)?
+    /// Fired when the agent needs a yes/no, so the notch can open itself.
+    var onApproval: (() -> Void)?
+
+    /// True once an AI is connected (Settings › AI).
+    var aiConnected: Bool { core.provider.isConnected }
+
+    let core = AgentCore()
+    private var counter = 0
+    private var turnHadText = false
+
+    func start() {
+        core.emit = { [weak self] ev in self?.handle(ev) }
+        applyStatus(core.statusEvent())
+        for h in core.history {
+            add(h.role == "user" ? .user : .assistant, h.text)
+        }
+    }
+
+    func shutdown() {
+        core.stop()
+    }
+
+    /// Settings › AI changed the provider or model.
+    func reloadAI() {
+        core.reloadProvider()
+    }
+
+    /// Send a prompt plus whatever is attached. The model gets the context
+    /// under the marker; the bubble shows only what you typed.
+    func send(_ text: String, voice: Bool = false) {
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty || !attachments.isEmpty else { return }
+        // Quick capture ("remind me…", "note: …") is handled locally, instantly.
+        if attachments.isEmpty, !t.hasPrefix("/"), !busy, let reply = interceptor?(t) {
+            sentHistory.append(t)
+            showLocalExchange(user: voice ? "🎙 " + t : t, reply: reply, remember: t)
+            return
+        }
+        if t.isEmpty { t = "Take a look at this." }
+        if !t.hasPrefix("/") { sentHistory.append(t) }
+
+        var context: [String] = []
+        let files = attachments.filter { $0.kind == .file }.map(\.value)
+        if !files.isEmpty {
+            context.append("Attached files (read them with the right tool — read_file, read_pdf, read_docx or read_image):\n"
+                           + files.map { "- \($0)" }.joined(separator: "\n"))
+        }
+        for shot in attachments where shot.kind == .screenshot {
+            context.append("A screenshot of my screen right now is at \(shot.value) — open it with read_image before answering.")
+        }
+        for sel in attachments where sel.kind == .selection {
+            context.append("Text I have selected\(selectionSource.map { " in \($0)" } ?? ""):\n```\n\(sel.value.prefix(20000))\n```")
+        }
+        for page in attachments where page.kind == .web {
+            let lines = page.value.components(separatedBy: "\n")
+            context.append("I'm looking at this web page: “\(lines.first ?? "")” — \(lines.dropFirst().first ?? "")\n"
+                           + "Fetch it with fetch_url if you need its content.")
+        }
+        for clip in attachments where clip.kind == .clipboard {
+            context.append("My clipboard:\n```\n\(clip.value.prefix(20000))\n```")
+        }
+        if voice {
+            context.append("Hands-free voice mode: your reply is spoken aloud. Answer in one to three short, "
+                           + "natural sentences. No markdown, lists, tables or code unless I ask for them. "
+                           + "For actions, just do them and confirm in one sentence.")
+        }
+        var body: [String: Any] = ["text": t]
+        if !context.isEmpty {
+            body["text"] = t + "\n\n[OpenNotch context]\n" + context.joined(separator: "\n\n")
+            let chips = attachments.map { "📎 " + $0.label }.joined(separator: "  ")
+            body["display"] = chips.isEmpty ? (voice ? "🎙 " + t : t) : t + "\n" + chips
+        }
+        attachments = []
+        core.send(body["text"] as? String ?? t, display: body["display"] as? String)
+    }
+
+    func attach(_ a: Attachment) {
+        if !attachments.contains(where: { $0.value == a.value }) { attachments.append(a) }
+    }
+
+    /// Files and links dropped on the notch: files as files, links as web pages.
+    func attachDropped(_ urls: [URL]) {
+        for u in urls {
+            if u.isFileURL { attach(Attachment(kind: .file, value: u.path)) }
+            else if let scheme = u.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+                attach(Attachment(kind: .web, value: "\(u.host ?? "Link")\n\(u.absoluteString)"))
+            }
+        }
+    }
+
+    func attachClipboard() {
+        guard let s = NSPasteboard.general.string(forType: .string), !s.isEmpty else {
+            add(.info, "Clipboard is empty")
+            return
+        }
+        attach(Attachment(kind: .clipboard, value: s))
+    }
+
+    // MARK: local exchanges, writing tools, proactive
+
+    /// Returns a confirmation if the text was handled locally (quick capture).
+    var interceptor: ((String) -> String?)?
+    /// App name the current `.selection` attachment came from.
+    var selectionSource: String?
+
+    /// Show an exchange that didn't go through the agent, tell the agent about
+    /// it (so follow-ups work), and let hands-free speak it.
+    func showLocalExchange(user: String, reply: String, remember original: String? = nil) {
+        add(.user, user)
+        add(.assistant, reply)
+        lastAnswer = reply
+        lastDoneAt = Date()
+        onTurnFinished?(reply, false)
+        core.remember(user: original ?? user, assistant: reply)
+    }
+
+    enum CallResult { case success(String), failure(String) }
+
+    /// Writing tools: rewrite `text` per `instruction`, returning only the result.
+    func transform(_ text: String, instruction: String, _ done: @escaping (CallResult) -> Void) {
+        let prompt = "\(instruction)\n\nReturn only the rewritten text — no preamble, no quotes.\n\n\(text)"
+        Task {
+            do { done(.success(try await core.complete(prompt, system: "You rewrite text exactly as asked."))) }
+            catch { done(.failure(error.localizedDescription)) }
+        }
+    }
+
+    /// A one-off prompt outside the chat (proactive morning brief).
+    func oneshot(_ prompt: String, _ done: @escaping (CallResult) -> Void) {
+        Task {
+            do { done(.success(try await core.complete(prompt))) }
+            catch { done(.failure(error.localizedDescription)) }
+        }
+    }
+
+    struct Mail { let id: String; let from: String; let subject: String }
+
+    /// Emails that need a reply — needs a mail connector (MCP, phase 3). None yet.
+    func inboxNeedingReply(_ done: @escaping ([Mail]?) -> Void) { done(nil) }
+
+    // MARK: music
+
+    func media(_ action: String, query: String? = nil) {
+        Task {
+            let res = await Task.detached { MediaControl.control(action, query: query) }.value
+            var ev = res
+            ev["type"] = "media"
+            if action != "pause" { ev["state"] = ev["state"] ?? "playing" }
+            handle(ev)
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            await refreshNowPlaying()
+        }
+    }
+
+    /// Scrub bar: jump to `seconds`, updating the local clock straight away.
+    func seek(_ seconds: Double) {
+        var np = nowPlaying
+        np.position = seconds; np.at = Date()
+        nowPlaying = np
+        Task {
+            _ = await Task.detached { MediaControl.control("seek", position: seconds) }.value
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            await refreshNowPlaying()
+        }
+    }
+
+    func refreshNowPlaying() async {
+        let obj = await Task.detached { MediaControl.nowPlaying() }.value
+        let np = NowPlaying(obj)
+        if np != nowPlaying { nowPlaying = np }
+    }
+
+    private func loadArtwork(_ np: NowPlaying) {
+        artworkTask?.cancel()
+        guard np.artKey != nil else { artwork = nil; artworkTint = nil; return }
+        artworkTask = Task { [weak self] in
+            var data: Data?
+            if let s = np.artworkURL, let url = URL(string: s), url.scheme == "https" {
+                data = try? await URLSession.shared.data(from: url).0
+            } else if let path = np.artworkPath {
+                data = await Task.detached { try? Data(contentsOf: URL(fileURLWithPath: path)) }.value
+            }
+            guard !Task.isCancelled, let self else { return }
+            let image = data.flatMap { NSImage(data: $0) }
+            self.artwork = image
+            self.artworkTint = image.flatMap(ArtworkColor.vivid)
+        }
+    }
+
+    private var lastNotice: (text: String, at: Date)?
+
+    /// Show an error once — the same message repeated within 20s is dropped
+    /// (a retried action shouldn't stack identical cards).
+    func notice(_ text: String) {
+        if let last = lastNotice, last.text == text, Date().timeIntervalSince(last.at) < 20 { return }
+        lastNotice = (text, Date())
+        add(.error, text)
+    }
+
+    func stop() { core.stop() }
+    func newChat() { core.newChat() }
+
+    func answer(_ approval: Approval, allow: Bool) {
+        approvals.removeAll { $0.id == approval.id }
+        core.approve(id: approval.id, allow: allow)
+    }
+
+    // MARK: agent events
+
+    private func applyStatus(_ ev: [String: Any]) {
+        if let b = ev["busy"] as? Bool { busy = b }
+        if let p = ev["provider"] as? String { provider = p }
+        if let m = ev["model"] as? String { model = m }
+    }
+
+    private func handle(_ ev: [String: Any]) {
+        switch ev["type"] as? String ?? "" {
+        case "status":
+            applyStatus(ev)
+        case "user":
+            let injected = ev["injected"] as? Bool ?? false
+            add(.user, (injected ? "↪ " : "") + (ev["text"] as? String ?? ""))
+            if !injected { turnHadText = false; lastTool = ""; turnStarted = Date() }
+        case "text":
+            let delta = ev["delta"] as? String ?? ""
+            turnHadText = true
+            lastTextAt = Date()
+            onTextDelta?(delta)
+            if let i = items.indices.last, items[i].kind == .assistant, items[i].streaming {
+                items[i].text += delta
+            } else {
+                add(.assistant, delta, streaming: true)
+            }
+        case "tool":
+            let id = ev["id"] as? String ?? UUID().uuidString
+            let state = ev["state"] as? String ?? "running"
+            let verb = ev["verb"] as? String ?? ""
+            let kind = Item.Kind.tool(state: state, icon: ev["icon"] as? String ?? "◆", verb: verb,
+                                      detail: ev["detail"] as? String ?? "", error: ev["error"] as? String)
+            closeStreaming()
+            if let i = items.firstIndex(where: { $0.id == id }) {
+                items[i].kind = kind
+            } else {
+                items.append(Item(id: id, kind: kind, text: ""))
+            }
+            lastTool = state == "running" ? verb : ""
+            if state == "running" { onToolStarted?(verb.isEmpty ? (ev["detail"] as? String ?? "") : verb) }
+        case "approval":
+            approvals.append(Approval(id: ev["id"] as? String ?? "", tool: ev["tool"] as? String ?? "",
+                                      preview: ev["preview"] as? String ?? ""))
+            onApproval?()
+        case "approval_done":
+            approvals.removeAll { $0.id == ev["id"] as? String }
+        case "done":
+            closeStreaming()
+            let text = ev["text"] as? String ?? ""
+            // The loop returns provider failures as the answer text, e.g.
+            // "[Groq error: Error code: 404 …]" — show those as errors.
+            let isProviderError = text.hasPrefix("[") && text.range(of: #"^\[\w+ error:"#,
+                                                                    options: [.regularExpression, .caseInsensitive]) != nil
+            lastDoneAt = Date()
+            if isProviderError {
+                lastErrorAt = Date()
+                if let i = items.indices.last, items[i].kind == .assistant, items[i].text == text {
+                    items.remove(at: i)
+                }
+                add(.error, String(text.dropFirst().dropLast()))
+            } else if !turnHadText && !text.isEmpty && text != "[No text response]" {
+                add(.assistant, text)
+            }
+            lastAnswer = text
+            onTurnFinished?(isProviderError ? "Sorry, the model failed. Try again." : text, turnHadText && !isProviderError)
+            lastTool = ""
+            turnStarted = nil
+            if let i = items.lastIndex(where: { $0.kind == .assistant }) {
+                items[i].meta = Self.stats(ev)
+            }
+            onDone?(text)
+        case "info":
+            add(.info, ev["text"] as? String ?? "")
+        case "error":
+            closeStreaming()
+            lastErrorAt = Date()
+            add(.error, ev["text"] as? String ?? "error")
+        case "media":
+            // Action results ("pause", "next") carry no track details — keep
+            // what we know and let the refresh that follows fill it in.
+            var np = NowPlaying(ev)
+            if np.track.isEmpty {
+                np = nowPlaying
+                np.position = nowPlaying.livePosition(); np.at = Date()
+                np.state = NowPlaying(ev).state
+            }
+            nowPlaying = np
+        case "cleared":
+            items = []
+            approvals = []
+        default:
+            break
+        }
+    }
+
+    private static func stats(_ ev: [String: Any]) -> String {
+        var parts: [String] = []
+        if let ms = ev["ms"] as? Int { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
+        if let n = ev["toolCalls"] as? Int, n > 0 { parts.append("\(n) tool\(n == 1 ? "" : "s")") }
+        let tin = ev["inTokens"] as? Int ?? 0, tout = ev["outTokens"] as? Int ?? 0
+        if tin + tout > 0 {
+            let k = Double(tin + tout)
+            parts.append(k >= 1000 ? String(format: "%.1fk tokens", k / 1000) : "\(tin + tout) tokens")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func closeStreaming() {
+        if let i = items.indices.last, items[i].streaming { items[i].streaming = false }
+    }
+
+    private func add(_ kind: Item.Kind, _ text: String, streaming: Bool = false) {
+        counter += 1
+        items.append(Item(id: "i\(counter)", kind: kind, text: text, streaming: streaming))
+        if items.count > 300 { items.removeFirst(items.count - 300) }
+    }
+}

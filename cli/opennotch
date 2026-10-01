@@ -1,0 +1,43 @@
+#!/bin/bash
+# Talk to OpenNotch from anywhere — Terminal, Raycast, Shortcuts, git hooks.
+#   opennotch                       open / close the notch
+#   opennotch "what's on my plate"  ask a question
+#   git diff | opennotch "review"   piped input is attached as context
+#   opennotch -h                    toggle hands-free (talk to it)
+#   opennotch -m timers             open a module: files clipboard shelf notes timers calendar
+#                               media system screenTime convert usage captures chat
+#   opennotch --settings [tab]      open Settings ((general ai notch desktop voice permissions shortcuts))
+#   opennotch --awake [60|on|off]   keep the Mac awake (minutes, until off, or stop)
+#   opennotch -m mirror             camera mirror
+#   opennotch -t 10                 start a 10-minute timer (also: 90s, focus, stopwatch, pause, stop)
+# Put it on your PATH:  ln -s "$PWD/opennotch" /usr/local/bin/opennotch
+set -euo pipefail
+pgrep -x OpenNotch >/dev/null || { open -b dev.opennotch.OpenNotch 2>/dev/null || open "$(dirname "$0")/../build/OpenNotch.app"; sleep 2; }
+
+case "${1:-}" in
+  -h|--handsfree) set -- ; NOTCH_FORCE_NAME="dev.opennotch.handsfree" ;;
+  --closeup)      NOTCH_FORCE_NAME="dev.opennotch.closeup"; NOTCH_MODULE="${2:-0.35}"; set -- ;;
+  --settings)     NOTCH_FORCE_NAME="dev.opennotch.settings"; NOTCH_MODULE="${2:-general}"; set -- ;;
+  --awake)        NOTCH_FORCE_NAME="dev.opennotch.awake"; NOTCH_MODULE="${2:-toggle}"; set -- ;;
+  -t|--timer)     NOTCH_FORCE_NAME="dev.opennotch.timer"; NOTCH_MODULE="${2:-25}"; set -- ;;
+  -m|--module)    NOTCH_FORCE_NAME="dev.opennotch.module"; NOTCH_MODULE="${2:-chat}"; set -- ;;
+esac
+prompt="${*:-}"
+if [ -p /dev/stdin ] || [ -f /dev/stdin ]; then
+  piped="$(head -c 60000)"
+  if [ -n "$piped" ]; then
+    prompt="${prompt:-Take a look at this.}"$'\n\n[OpenNotch context]\nPiped input:\n```\n'"$piped"$'\n```'
+  fi
+fi
+
+name="dev.opennotch.toggle"
+[ -n "$prompt" ] && name="dev.opennotch.ask"
+[ -n "${NOTCH_FORCE_NAME:-}" ] && name="$NOTCH_FORCE_NAME" && prompt="${NOTCH_MODULE:-}"
+NOTCH_NAME="$name" NOTCH_TEXT="$prompt" osascript -l JavaScript -e '
+ObjC.import("Foundation");
+const env = $.NSProcessInfo.processInfo.environment;
+const name = ObjC.unwrap(env.objectForKey("NOTCH_NAME"));
+const text = ObjC.unwrap(env.objectForKey("NOTCH_TEXT")) || "";
+$.NSDistributedNotificationCenter.defaultCenter
+  .postNotificationNameObjectUserInfoDeliverImmediately(name, text, $(), true);
+' >/dev/null
