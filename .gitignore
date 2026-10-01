@@ -11,3 +11,5 @@ App/.build/
 *.key
 .env
 .env.*
+# Local promo material (never pushed)
+PROMOTION/

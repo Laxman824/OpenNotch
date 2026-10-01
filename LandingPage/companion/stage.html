@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenNotch companion</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+  #host { position: fixed; inset: 0; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<script type="module">
+  // The desktop companion exactly as the app runs it (dreamer.js + three.js), in a web page.
+  import { mount } from "./dreamer.js";
+  try { localStorage.removeItem("dreamer:state"); } catch (e) { /* storage blocked */ }
+  const q = new URLSearchParams(location.search);
+  const floor = +(q.get("floor") || 18), delay = +(q.get("delay") || 250);
+  const api = mount(document.getElementById("host"));
+  api.setWorld({ w: innerWidth, h: innerHeight, floor, ceil: 0 });
+  addEventListener("resize", () => api.setWorld({ w: innerWidth, h: innerHeight, floor, ceil: 0 }));
+  // Arrive the way the app does on first launch: drop in from the top, land, ta-da.
+  setTimeout(() => api.entrance(innerWidth / 2), delay);
+</script>
+</body>
+</html>

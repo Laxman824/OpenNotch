@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenNotch — an AI assistant in your MacBook's notch</title>
+<meta name="description" content="OpenNotch turns your MacBook's notch into an AI assistant that actually does things: 14 tools, hands-free voice, MCP connectors and approvals for anything risky. Free, open source, and your data stays on your Mac.">
+<meta name="theme-color" content="#06060c">
+<meta property="og:title" content="OpenNotch — an AI assistant in your MacBook's notch">
+<meta property="og:description" content="AI, 14 tools and a jelly-blob friend in your notch. Free, open source, local-first.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://laxman824.github.io/OpenNotch/">
+<meta property="og:image" content="https://laxman824.github.io/OpenNotch/assets/og.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<canvas id="pixels" aria-hidden="true"></canvas>
+
+<!-- ───────── The site's own notch (nav + live activity + demo) ───────── -->
+<div class="site-notch" id="notch" tabindex="0" aria-label="OpenNotch — hover or focus the notch to open it">
+  <div class="glowring" aria-hidden="true"></div>
+  <div class="ears">
+    <a class="brand" href="#top"><canvas id="earPuff" class="ear-puff" aria-hidden="true"></canvas><b>OpenNotch</b></a>
+    <div class="ear-right" id="earRight" aria-live="polite"></div>
+  </div>
+  <div class="panel" id="panel">
+    <div class="p-head"><canvas id="panelPuff" class="p-puff" aria-hidden="true"></canvas><div><b>Ledge</b><small id="pStatus">Ready</small></div><kbd>⌥Space</kbd></div>
+    <div class="p-body" id="pBody"></div>
+    <nav class="p-nav">
+      <a href="#features">Tools</a><a href="#work">Assistant</a><a href="#voice">Voice</a><a href="#mcp">MCP</a><a href="#privacy">Privacy</a><a href="#companions">Companions</a><a href="#install">Install</a><a href="https://github.com/Laxman824/OpenNotch" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+  </div>
+</div>
+<a class="corner corner-r btn btn-ghost btn-sm" href="https://github.com/Laxman824/OpenNotch" target="_blank" rel="noopener">
+  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+  <span>Star</span>
+</a>
+<span class="corner corner-l">v0.1 · MIT</span>
+
+<main id="top">
+<!-- ───────── Hero: the page notch is the hero object ───────── -->
+<section class="hero" data-ear="demo">
+  <div class="eclipse" aria-hidden="true"></div>
+  <div class="hero-pointer reveal" aria-hidden="true"><span>hover the notch</span><i></i></div>
+  <div class="hero-copy">
+    <p class="kicker reveal">Free · Open source · macOS 14+</p>
+    <h1 class="reveal">That little black notch? <em>It works for you now.</em></h1>
+    <p class="lede reveal">OpenNotch turns it into an AI assistant that actually <em>does</em> things, with 14 tools, hands-free voice and MCP connectors. Anything risky waits for your OK, and your data stays on your Mac.</p>
+    <div class="cta reveal">
+      <a class="btn btn-primary" href="https://github.com/Laxman824/OpenNotch/releases" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16.4 12.6c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2 0 1.7-.8 3.1-.8 1.5 0 1.9.8 3.2.8 1.3 0 2.1-1.2 2.9-2.4.9-1.4 1.3-2.7 1.3-2.8 0 0-2.4-1-2.4-3.9zM14.1 5.5c.7-.8 1.1-1.9 1-3-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.8-1 2.9 1.1.1 2.1-.6 2.8-1.4z"/></svg>
+        Download for macOS
+      </a>
+      <a class="btn btn-ghost" href="#film">▶ Watch the film</a>
+    </div>
+  </div>
+  <div class="hero-floor">
+    <iframe id="heroBuddy" title="Bee, the live 3D desktop companion — click to poke, drag to throw" loading="eager"></iframe>
+    <p class="floor-hint">That's Bee — live 3D, the app's own code. Poke her. Throw her.</p>
+  </div>
+</section>
+
+<!-- ───────── Film ───────── -->
+<section class="film" id="film" data-ear="film">
+  <div class="film-sticky">
+    <p class="film-title" id="filmTitle">See the whole thing in <em>48 seconds.</em></p>
+    <div class="film-frame" id="filmFrame">
+      <video id="filmVideo" src="assets/opennotch-film.mp4" poster="assets/og.jpg" controls playsinline preload="none"></video>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── Stats ───────── -->
+<section class="stats">
+  <div class="stat reveal"><b data-count="14">14</b><span>notch tools</span></div>
+  <div class="stat reveal"><b data-count="40" data-suffix="+">40+</b><span>agent tools</span></div>
+  <div class="stat reveal"><b>Any</b><span>AI — cloud, local or on-device</span></div>
+  <div class="stat reveal"><b data-count="0">0</b><span>accounts &amp; telemetry</span></div>
+</section>
+
+<!-- ───────── Manifesto (lights up as you scroll) ───────── -->
+<section class="manifesto" id="why" data-ear="film">
+  <p class="mf" id="manifesto">Every MacBook has a notch. Most of them just sit there. Yours could plan your day, keep your clipboard, play your music, guard your data — and wave hello.</p>
+</section>
+
+<!-- ───────── Pinned showcase: the notch morphs through the tools ───────── -->
+<section class="showcase" id="features" data-ear="tools">
+  <div class="sc-sticky">
+    <div class="sc-copy">
+      <p class="kicker">Everything, one hover away</p>
+      <h2>14 tools. <em>One notch.</em></h2>
+      <ol class="sc-list" id="scList">
+        <li class="on"><b>Clipboard history</b><span>Text, links and images — stays on this Mac.</span></li>
+        <li><b>Drag &amp; drop shelf</b><span>Drop files on the notch: ask, keep or convert.</span></li>
+        <li><b>Calendar &amp; reminders</b><span>Your day at a glance.</span></li>
+        <li><b>Music</b><span>Spotify or Apple Music, with a live wave.</span></li>
+        <li><b>Focus timers</b><span>Pomodoro, countdowns, a stopwatch.</span></li>
+      </ol>
+    </div>
+    <div class="sc-stage" id="scStage">
+      <div class="big-notch" id="bigNotch">
+        <div class="bn-tabs" aria-hidden="true">
+          <i data-i="0">⧉</i><i data-i="1">⇩</i><i data-i="2">▦</i><i data-i="3">♫</i><i data-i="4">◔</i>
+        </div>
+        <div class="bn-pane on" data-i="0">
+          <header><b>Clipboard</b><small>6 items · stays on this Mac</small></header>
+          <div class="clip new"><i style="--c:#5C8CFF"></i>github.com/Laxman824/OpenNotch<em>just now</em></div>
+          <div class="clip"><i style="--c:#B066FF"></i>Ship the notch build by Friday ✨<em>2 min</em></div>
+          <div class="clip"><i style="--c:#FF66AB"></i>Screenshot 9.41.png<em>12 min</em></div>
+          <div class="clip"><i style="--c:#FF9E4D"></i>Meeting moved to 3 pm<em>20 min</em></div>
+        </div>
+        <div class="bn-pane" data-i="1">
+          <header><b>Shelf</b><small>Drop files here, drag them out anywhere.</small></header>
+          <div class="drop">
+            <span>✦<br>Ask Ledge</span><span class="hot">⇩<br>Keep on Shelf</span><span>▣<br>Convert images</span>
+            <div class="file f-fall"><b>PDF</b></div>
+          </div>
+        </div>
+        <div class="bn-pane" data-i="2">
+          <header><b>Calendar</b><small>Thursday · 3 events · 3 reminders</small></header>
+          <div class="cal2">
+            <div class="evs"><div class="ev" style="--c:#5C8CFF;--y:0">9:30 · Standup</div><div class="ev" style="--c:#B066FF;--y:1">11:00 · Design review</div><div class="ev" style="--c:#FF9E4D;--y:2">3:00 · Coffee with Sam</div></div>
+            <ul class="rem"><li class="done">Send the invoice</li><li>Renew passport</li><li>Buy coffee beans</li></ul>
+          </div>
+        </div>
+        <div class="bn-pane" data-i="3">
+          <header><b>Music</b><small>Spotify or Apple Music</small></header>
+          <div class="player"><div class="art"></div><div class="pmeta"><b>Night Drive</b><small>Lo-Fi Club</small><div class="scrub"><i></i></div><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>
+        </div>
+        <div class="bn-pane" data-i="4">
+          <header><b>Timers</b><small>Focus · countdown · stopwatch</small></header>
+          <div class="vis-timer big"><svg viewBox="0 0 120 120"><defs><linearGradient id="tg2" x1="0" x2="1"><stop offset="0" stop-color="#5C8CFF"/><stop offset=".5" stop-color="#B066FF"/><stop offset="1" stop-color="#FF66AB"/></linearGradient></defs><circle cx="60" cy="60" r="50" class="track"/><circle cx="60" cy="60" r="50" class="ring" style="stroke:url(#tg2)"/></svg><b id="bnClock">25:00</b></div>
+        </div>
+      </div>
+      <div class="sc-progress"><i id="scBar"></i></div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── The assistant: dock + monochrome bento ───────── -->
+<section class="section" id="work" data-ear="work">
+  <header class="sec-head reveal">
+    <p class="kicker">The assistant</p>
+    <h2>Ask once. <em>Watch it work.</em></h2>
+    <p>Forty-plus built-in tools — files, shell, web, Mail, Notes, calendar, reminders, contacts, weather — driven by whichever AI you choose.</p>
+  </header>
+
+  <div class="dock-wrap reveal">
+    <div class="dock" id="dock" aria-label="Some of the assistant's tools"></div>
+    <p class="dock-cap">hover the dock</p>
+  </div>
+
+  <div class="wgrid">
+    <article class="wcard span2 reveal">
+      <div class="wvis run">
+        <div class="run-think"><header><i class="spark"></i><span id="runHead">Thinking…</span></header><p id="runThink"></p></div>
+        <div class="run-plan"><header>Plan <span id="runCount">0/4</span></header>
+          <ol id="runPlan"><li>Read today's calendar</li><li>Check reminders due</li><li>Get the weather</li><li>Write a short plan</li></ol></div>
+      </div>
+      <h3>Watch it think. Follow its plan.</h3>
+      <p>Thinking streams live, multi-step work gets a plan card, and every tool call opens to show exactly what ran.</p>
+    </article>
+
+    <article class="wcard reveal">
+      <div class="wvis okv">
+        <div class="okcard" id="okCard">
+          <small>NEEDS YOUR OK</small><b>Run command</b><code>git pull &amp;&amp; npm test</code>
+          <div class="okbtns"><span>Deny</span><span class="ap">Approve</span></div>
+          <div class="okdone">✓ Approved · ran in 4.2 s</div>
+        </div>
+        <i class="okcur" aria-hidden="true"></i>
+      </div>
+      <h3>Nothing risky without you</h3>
+      <p>Commands, file edits, calendar changes and connector tools ask first. No answer in five minutes means no.</p>
+    </article>
+
+    <article class="wcard reveal">
+      <div class="wvis mailv">
+        <div class="mail">
+          <div class="mrow"><span>To</span>Sam</div>
+          <div class="mrow"><span>Re</span>Thursday</div>
+          <p class="mbody">Sounds great — see you at 3.</p>
+          <div class="mfoot"><span class="saved">Saved to Drafts</span><span class="send">Send<i></i></span></div>
+        </div>
+      </div>
+      <h3>Drafts. Never sends.</h3>
+      <p>It writes the reply in Mail and leaves it there. Sending is always your move.</p>
+    </article>
+
+    <article class="wcard reveal">
+      <div class="wvis schedv">
+        <svg class="dial" viewBox="0 0 200 200" aria-hidden="true">
+          <circle cx="100" cy="100" r="86" class="dial-rim"/>
+          <g class="ticks"></g>
+          <circle cx="100" cy="100" r="86" class="dial-arc"/>
+          <line x1="100" y1="100" x2="100" y2="30" class="hand"/>
+          <circle cx="100" cy="100" r="5" fill="#fff"/>
+        </svg>
+        <div class="sched-tags"><span>Weekdays · 9:00</span><span>“Brief me on today”</span></div>
+      </div>
+      <h3>On a schedule</h3>
+      <p>“Every weekday at 9, brief me.” It runs while you work and reports in the notch.</p>
+    </article>
+
+    <article class="wcard reveal">
+      <div class="wvis cliv">
+        <pre><span class="pr">~</span> git diff | opennotch <span class="str">"review this"</span>
+<span class="out">↑ sent to the notch</span>
+<span class="pr">~</span> opennotch -t 25
+<span class="out">◔ 25:00 focus timer</span><span class="caret"></span></pre>
+      </div>
+      <h3>From any terminal</h3>
+      <p>Pipe anything into the notch with the <code>opennotch</code> CLI.</p>
+    </article>
+  </div>
+</section>
+
+<!-- ───────── Voice ───────── -->
+<section class="voice" id="voice" data-ear="voice">
+  <div class="voice-inner">
+    <p class="kicker reveal">Hands-free mode</p>
+    <h2 class="huge reveal">Just say it.</h2>
+    <div class="say reveal" aria-live="polite">
+      <span class="mic" aria-hidden="true"></span>
+      <span id="sayText">“Hey Ledge, play something chill.”</span>
+    </div>
+    <div class="bigwave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="marquee" aria-hidden="true"><div class="mq-track">
+      <span>“What's on my calendar?”</span><span>“Play something chill.”</span><span>“Summarise this page.”</span><span>“Draft a reply to Sam.”</span><span>“Start a focus timer.”</span><span>“What's the weather?”</span><span>“Explain my screen.”</span><span>“Remind me at 5.”</span>
+      <span>“What's on my calendar?”</span><span>“Play something chill.”</span><span>“Summarise this page.”</span><span>“Draft a reply to Sam.”</span><span>“Start a focus timer.”</span><span>“What's the weather?”</span><span>“Explain my screen.”</span><span>“Remind me at 5.”</span>
+    </div></div>
+    <p class="lede reveal">Talk, hear the answer and interrupt any time. It even asks for approvals out loud — just say “yes” or “no”. Speech recognition runs on your Mac.</p>
+  </div>
+</section>
+
+<!-- ───────── MCP: animated beams ───────── -->
+<section class="section" id="mcp" data-ear="mcp">
+  <header class="sec-head reveal">
+    <p class="kicker">Connectors</p>
+    <h2>Plug in <em>any tool</em> with MCP.</h2>
+    <p>GitHub, Slack, Notion, a browser — any <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">Model Context Protocol</a> server becomes part of the assistant. Connector tools still ask before they act.</p>
+  </header>
+  <div class="beam reveal" id="beam">
+    <svg class="beam-svg" id="beamSvg" aria-hidden="true"></svg>
+    <div class="b-col b-left">
+      <div class="b-node" data-b><span class="mono" style="--c:#24292f">GH</span>GitHub</div>
+      <div class="b-node" data-b><span class="mono" style="--c:#4a154b">S</span>Slack</div>
+      <div class="b-node" data-b><span class="mono" style="--c:#e9e9e6;color:#111">N</span>Notion</div>
+      <div class="b-node" data-b><span class="mono" style="--c:#5e6ad2">L</span>Linear</div>
+      <div class="b-node" data-b><span class="mono" style="--c:#2f6bff">◎</span>Browser</div>
+      <div class="b-node" data-b><span class="mono" style="--c:#3a3a42">⌂</span>Files</div>
+    </div>
+    <div class="b-center" id="bCenter"><div class="b-notch"><canvas id="beamPuff" aria-hidden="true"></canvas></div><b>OpenNotch</b><small>approvals · routing</small></div>
+    <div class="b-col b-right"><div class="b-node big" id="bAI" data-b><span class="ai-row"><span class="ai-logo" id="aiLogo"></span><span class="ai-name" id="aiName">Claude</span></span><small>your AI</small></div></div>
+  </div>
+  <div class="mcp-foot">
+    <div class="code reveal" aria-label="Example mcp.json">
+      <div class="code-bar"><i></i><i></i><i></i><span>mcp.json · Settings › AI › Edit mcp.json</span></div>
+<pre><code><span class="p">{</span> <span class="k">"mcpServers"</span><span class="p">: {</span>
+  <span class="k">"github"</span><span class="p">: {</span> <span class="k">"command"</span><span class="p">:</span> <span class="s">"npx"</span><span class="p">,</span>
+    <span class="k">"args"</span><span class="p">: [</span><span class="s">"-y"</span><span class="p">,</span> <span class="s">"@modelcontextprotocol/server-github"</span><span class="p">],</span>
+    <span class="k">"autoApprove"</span><span class="p">: [</span><span class="s">"search_repositories"</span><span class="p">] }</span>
+<span class="p">} }</span></code></pre>
+    </div>
+    <ul class="mcp-points reveal">
+      <li><b>Any server</b><span>stdio MCP servers in the common <code>mcpServers</code> format.</span></li>
+      <li><b>Named tools</b><span>Each tool joins as <code>mcp__server__tool</code>.</span></li>
+      <li><b>Still asks</b><span>Approval required unless you list it in <code>autoApprove</code>.</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ───────── Privacy ───────── -->
+<section class="section privacy" id="privacy" data-ear="local">
+  <div class="vault reveal" aria-hidden="true">
+    <div class="laptop">
+      <div class="lscreen">
+        <div class="lnotch"></div>
+        <div class="folder"><span class="lock"></span></div>
+        <code>~/Library/Application Support/OpenNotch</code>
+        <span class="chip c1">Chats</span><span class="chip c2">Memory</span><span class="chip c3">Clipboard</span><span class="chip c4">Notes</span>
+      </div>
+      <div class="lbase"></div>
+    </div>
+    <svg class="nocloud" viewBox="0 0 80 80" aria-label="No OpenNotch servers"><circle cx="40" cy="40" r="38" fill="rgba(255,90,90,.08)" stroke="rgba(255,90,90,.6)" stroke-width="1.5"/><path d="M27 50h27a8 8 0 0 0 0-16 12 12 0 0 0-23 3.5A6.3 6.3 0 0 0 27 50z" fill="none" stroke="rgba(255,255,255,.85)" stroke-width="2.2" stroke-linejoin="round"/><path d="M18 62L62 18" stroke="#ff5e5e" stroke-width="3.5" stroke-linecap="round"/></svg>
+  </div>
+  <div class="split-copy reveal">
+    <p class="kicker">Local-first</p>
+    <h2>Your data <em>stays on your Mac.</em></h2>
+    <ul class="checks">
+      <li>Chats, memory, clipboard and settings are saved locally</li>
+      <li>API keys are stored in your macOS Keychain</li>
+      <li>No account, no telemetry, no OpenNotch servers</li>
+      <li>The only traffic goes to the AI you pick — or go fully offline with Ollama, LM Studio or Apple on-device</li>
+    </ul>
+    <p class="fine">Weather uses Open-Meteo, and web fetches happen only when you ask for them.</p>
+  </div>
+</section>
+<div class="zeros reveal" aria-label="Privacy at a glance">
+  <div><b>0</b><span>accounts</span></div>
+  <div><b>0</b><span>telemetry</span></div>
+  <div><b>0</b><span>OpenNotch servers</span></div>
+  <div><b>100<small>%</small></b><span>of your chats on your Mac</span></div>
+</div>
+
+<!-- ───────── Any AI: orbiting providers ───────── -->
+<section class="section orbit-sec" id="ai" data-ear="ai">
+  <div class="orbit reveal" aria-hidden="true">
+    <div class="ring r2"><span style="--a:0deg"><b class="lchip" data-k="ollama"></b></span><span style="--a:60deg"><b class="lchip" data-k="meta"></b></span><span style="--a:120deg"><b class="lchip" data-k="openrouter"></b></span><span style="--a:180deg"><b class="lchip" data-k="lmstudio"></b></span><span style="--a:240deg"><b class="lchip groq"><i>groq</i><em>Groq</em></b></span><span style="--a:300deg"><b class="lchip" data-k="chip"></b></span></div>
+    <div class="ring r1"><span style="--a:30deg"><b class="lchip" data-k="claude"></b></span><span style="--a:150deg"><b class="lchip" data-k="openai"></b></span><span style="--a:270deg"><b class="lchip" data-k="googlegemini"></b></span></div>
+    <canvas id="orbitPuff"></canvas>
+  </div>
+  <div class="split-copy reveal">
+    <p class="kicker">Bring your own brain</p>
+    <h2>Works with <em>any AI.</em></h2>
+    <ul class="ways">
+      <li><i class="wl" data-l="openrouter"></i><b>Sign in with OpenRouter</b><span>One login for Claude, GPT, Gemini and free models — with your own spending limit.</span></li>
+      <li><i class="wl" data-l="openai claude googlegemini groq"></i><b>Paste an API key</b><span>OpenAI, Anthropic, Google Gemini (free tier) or Groq. Kept in your Keychain.</span></li>
+      <li><i class="wl" data-l="ollama lmstudio meta"></i><b>Ollama · LM Studio</b><span>A local model. Fully offline, free.</span></li>
+      <li><i class="wl" data-l="chip"></i><b>Apple on-device</b><span>macOS 26 with Apple Intelligence. No setup.</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ───────── Puff ───────── -->
+<section class="section puff-sec" id="puff" data-ear="puff">
+  <div class="puff-stage reveal">
+    <canvas id="bigPuff" aria-label="Puff, the notch character. Click to poke, move back and forth to pet."></canvas>
+    <div class="puff-say" id="puffSay">hi!</div>
+  </div>
+  <div class="split-copy reveal">
+    <p class="kicker">Meet Puff</p>
+    <h2>A jelly blob <em>lives in your notch.</em></h2>
+    <p>Its eyes follow your cursor. Poke it and it gets grumpy. Poke it three times and it goes dizzy. Stroke it and hearts float up. It hops when a task finishes and peeks out now and then to say hi.</p>
+    <p class="try">Go on — <b>poke</b> it, <b>poke it three times</b>, or <b>wiggle</b> your cursor over it.</p>
+  </div>
+</section>
+
+<!-- ───────── Companions ───────── -->
+<section class="section" id="companions" data-ear="buddies">
+  <header class="sec-head reveal">
+    <p class="kicker">Desktop companions</p>
+    <h2>Pick your <em>desktop buddy.</em></h2>
+    <p>Bee (or Ledge, or Cat) jumps out of the notch on first launch, walks on your windows, dances to your music and points at the notch when the assistant needs your OK.</p>
+  </header>
+  <div class="stage reveal">
+    <div class="stage-wrap" id="stageWrap">
+      <div class="stage-notch" aria-hidden="true"></div>
+      <iframe id="stageFrame" title="Live 3D desktop companion — click to poke, wiggle over it to pet, drag to throw"></iframe>
+      <div class="stage-live"><i></i>Live 3D · the app's own code</div>
+    </div>
+    <div class="stage-ui">
+      <div class="avs" role="group" aria-label="Choose a companion">
+        <button class="av on" data-av="bee"><img src="assets/bee.png" alt=""><span>Bee</span></button>
+        <button class="av" data-av="ledge"><img src="assets/ledge.png" alt=""><span>Ledge</span></button>
+        <button class="av" data-av="cat"><img src="assets/cat.png" alt=""><span>Cat</span></button>
+        <button class="av soon" disabled><b>?</b><span>Coming soon</span></button>
+      </div>
+      <div class="acts">
+        <button class="act" id="dropBtn">⤓ Jump out of the notch</button>
+        <button class="act" id="danceBtn">♫ Dance</button>
+        <button class="act" id="cheerBtn">✦ Ta-da</button>
+      </div>
+      <p class="tiny">Click to poke · wiggle your cursor over it to pet · drag to pick it up and throw.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── Install ───────── -->
+<section class="section" id="install" data-ear="install">
+  <header class="sec-head reveal">
+    <p class="kicker">Get it</p>
+    <h2>Install in a minute.</h2>
+  </header>
+  <div class="steps">
+    <div class="step reveal"><span>1</span><b>Download</b><p>Grab <code>OpenNotch.dmg</code> from <a href="https://github.com/Laxman824/OpenNotch/releases" target="_blank" rel="noopener">Releases</a> and drag it to Applications.</p></div>
+    <div class="step reveal"><span>2</span><b>Open Anyway</b><p>Builds aren't notarised yet: System Settings › Privacy &amp; Security › <b>Open Anyway</b>. Once.</p></div>
+    <div class="step reveal"><span>3</span><b>Connect an AI</b><p>Settings › AI — sign in with OpenRouter, paste a key, or pick a local model.</p></div>
+  </div>
+  <div class="term reveal" id="term">
+    <div class="code-bar"><i></i><i></i><i></i><span>zsh — build from source</span><button class="copy" data-copy="git clone https://github.com/Laxman824/OpenNotch && cd OpenNotch&#10;scripts/signing.sh&#10;scripts/build.sh --install --open">Copy</button></div>
+    <pre id="termBody" aria-label="git clone https://github.com/Laxman824/OpenNotch, then scripts/signing.sh, then scripts/build.sh --install --open"></pre>
+  </div>
+</section>
+
+<!-- ───────── FAQ ───────── -->
+<section class="section faq" id="faq">
+  <header class="sec-head reveal"><h2>Questions</h2></header>
+  <details class="reveal"><summary>Is it really free?</summary><p>Yes. OpenNotch is MIT-licensed and open source. You pay only for the AI you choose — or nothing, with a local model.</p></details>
+  <details class="reveal"><summary>Does it work on a Mac without a notch?</summary><p>Yes — it shows a virtual notch. It needs macOS 14 Sonoma or later; Liquid Glass and the Apple on-device model need macOS 26.</p></details>
+  <details class="reveal"><summary>Can it send emails or messages on its own?</summary><p>No. It drafts replies in Mail; nothing is ever sent. Commands, file changes, calendar edits and connector tools wait for your approval.</p></details>
+  <details class="reveal"><summary>Where is my data?</summary><p>In <code>~/Library/Application Support/OpenNotch</code> on your Mac, with keys in the Keychain. There's no account and no telemetry.</p></details>
+  <details class="reveal"><summary>How do I add more tools?</summary><p>Add any MCP server to <code>mcp.json</code> (Settings › AI › Edit mcp.json). Its tools appear to the assistant automatically.</p></details>
+</section>
+
+<!-- ───────── Final CTA ───────── -->
+<section class="final" data-ear="final">
+  <div class="eclipse up" aria-hidden="true"></div>
+  <canvas id="finalPuff" class="final-puff" aria-hidden="true"></canvas>
+  <h2 class="reveal">Give your notch <em>a job.</em></h2>
+  <div class="cta reveal">
+    <a class="btn btn-primary" href="https://github.com/Laxman824/OpenNotch/releases" target="_blank" rel="noopener">Download for macOS</a>
+    <a class="btn btn-ghost" href="https://github.com/Laxman824/OpenNotch" target="_blank" rel="noopener">View on GitHub</a>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <span>OpenNotch · MIT · Made by <a href="https://laxman824.github.io/" target="_blank" rel="noopener">@Laxman824</a></span>
+  <span><a href="https://github.com/Laxman824/OpenNotch" target="_blank" rel="noopener">GitHub</a> · <a href="https://github.com/Laxman824/OpenNotch/issues" target="_blank" rel="noopener">Issues</a> · <a href="https://github.com/Laxman824/OpenNotch/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contribute</a></span>
+</footer>
+
+<script src="bg.js"></script>
+<script src="logos.js"></script>
+<script src="puff.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
