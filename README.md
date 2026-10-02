@@ -1,15 +1,68 @@
+<div align="center">
+
 # OpenNotch
 
-**An open-source AI assistant that lives in your MacBook's notch — with Ledge, a little 3D companion who walks your screen.**
+**That little black notch on your MacBook? It works for you now.**
 
-Hover the notch (or press ⌥Space) and ask anything. Music, timers, clipboard, notes, calendar,
+An open-source AI assistant that lives in the notch — it does real work, asks before anything risky,<br>
+listens hands-free, and brings a few friends. Free, local-first, and your data stays on your Mac.
+
+[**⬇ Download for macOS**](https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg) &nbsp;·&nbsp;
+[**Website**](https://laxman824.github.io/opennotch/) &nbsp;·&nbsp;
+[**Watch the film**](https://laxman824.github.io/opennotch/#film)
+
+![MIT](https://img.shields.io/badge/license-MIT-black) ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black) ![Apple silicon](https://img.shields.io/badge/Apple%20silicon-native-black) ![No account](https://img.shields.io/badge/account-none-black) ![No telemetry](https://img.shields.io/badge/telemetry-none-black)
+
+<a href="https://laxman824.github.io/opennotch/"><img src="docs/images/hero.jpg" alt="OpenNotch — That little black notch? It works for you now." width="100%"></a>
+
+<a href="https://laxman824.github.io/opennotch/#film"><img src="docs/images/preview.gif" alt="OpenNotch in motion: ask, approve, done — and all 14 modules" width="100%"></a>
+
+</div>
+
+Hover the notch (or press **⌥Space**) and ask anything. Music, timers, clipboard, notes, calendar,
 captures and a dozen more tools live there too, Dynamic-Island style. Everything runs on your Mac:
-your chats are stored locally, and the only network traffic goes to the AI you choose.
+chats are stored locally, and the only network traffic goes to the AI you choose.
 
 > **Status: early (0.1).** Works today: the notch, modules, pop-ups, the desktop companion, and the
 > AI agent with tools. See [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
-## Connect an AI
+## It does the work
+
+<img src="docs/images/assistant.jpg" alt="The assistant thinking, following a plan and calling calendar, reminders and weather tools" width="100%">
+
+It **summarises the page you're reading**, **catches up on your Mail inbox and drafts replies** (it never
+sends), searches and creates **Apple Notes**, looks up **contacts**, plans your day from your **calendar,
+reminders and the weather**, and **schedules prompts** ("every weekday at 9, brief me"). It also reads
+and edits files, runs shell commands, searches the web, controls music, looks at your screen, sets
+timers and remembers your preferences. You can watch it **think** and follow its **plan** live, and
+every chat is kept in **history** (⌘Y).
+
+## Nothing risky without your OK
+
+| | |
+|---|---|
+| <img src="docs/images/approval.jpg" alt="NEEDS YOUR OK — the notch glows yellow; Bee points at it" width="100%"> | Commands, file changes, calendar edits, drafts and connector tools wait for you. The notch glows yellow and chimes; in hands-free mode it asks out loud — say "yes" or "no". No answer in five minutes means no. **It drafts email; it never sends.** |
+| <img src="docs/images/voice.jpg" alt="Hands-free: Hey Ledge, what's on my calendar?" width="100%"> | **Hands-free voice.** Say "Hey Ledge…", hear the answer, interrupt any time. Speech recognition runs on your Mac. |
+| <img src="docs/images/proactive.jpg" alt="Proactive: Design review in 10 min — Join" width="100%"> | **Proactive, never pushy.** A morning brief, "meeting in 10 minutes — Join", "3 emails may need a reply — Draft replies". Proposals never act on their own. |
+
+## 14 tools, one hover away
+
+<img src="docs/images/modules.jpg" alt="Clipboard, Shelf, Notes, Timers, Calendar, Music, System and Captures modules" width="100%">
+
+Assistant · Find files · Menu bar (including the icons the notch hides) · Clipboard history · Shelf
+(drag & drop) · Notes · Timers & water breaks · Calendar & reminders · Music (with scrubbing) ·
+System · Screen time · Image converter · AI-usage heatmap · Captures with annotation — plus a ⌘K
+command palette, quick capture ("remind me to call Sam at 5", no AI needed) and live activities in
+the closed notch.
+
+<img src="docs/images/live.jpg" alt="Live activity in the closed notch" width="100%">
+
+**Live activities:** album art and a wave for music, timer rings, volume, AirPods, charging, system
+health — and a **mic & camera indicator** that names the app using your microphone.
+
+## Any AI. Any tool.
+
+<img src="docs/images/connect.jpg" alt="AI providers orbiting Puff, and MCP connectors beaming into the notch" width="100%">
 
 Open **Settings › AI** (notch menu › Settings…) and pick one:
 
@@ -21,49 +74,38 @@ Open **Settings › AI** (notch menu › Settings…) and pick one:
 | **Apple on-device** | macOS 26 with Apple Intelligence turned on — no setup, offline |
 | Sign in with ChatGPT | Coming once OpenAI issues OpenNotch its client ID |
 
-The assistant helps with everyday work using the apps you already have: **summarise the page you're
-reading**, **catch up on your Mail inbox and draft replies** (it never sends), search and create
-**Apple Notes**, look up **contacts**, plan your day from your **calendar, reminders and the weather**,
-and **schedule prompts** ("every weekday at 9, brief me"). It also reads and edits files, runs shell
-commands, searches the web, controls music, looks at your screen, sets timers and remembers your
-preferences. You can watch it **think** and follow its **plan** live, and every chat is kept in
-**history** (⌘Y). **Anything risky — commands, file changes, calendar edits, drafts — waits for your
-OK**: the notch glows yellow and chimes, and in hands-free mode it asks out loud ("say yes or no").
-
 ### Connectors (MCP)
 
 Add more tools (GitHub, Gmail, Slack, a browser…) with any [MCP](https://modelcontextprotocol.io)
 server: **Settings › AI › Edit mcp.json**, using the common `mcpServers` format. Connector tools ask for
 approval unless you list them under `"autoApprove"`.
 
-## Features
+## Meet Puff — and pick a desktop buddy
+
+<img src="docs/images/companions.jpg" alt="Puff, the notch character, and the Bee, Ledge and Cat desktop companions" width="100%">
+
+**Puff** is a soft jelly blob that lives in the notch. Its eyes follow your cursor; poke it and it gets
+grumpy, poke it three times and it goes dizzy, stroke it and hearts float up. It hops for joy when a task
+finishes and now and then peeks out to say hi. **Ledge, Bee or Cat** jumps out of the notch on first launch
+and walks on your windows, dances to your music and points at the notch when the assistant needs your OK.
+More companions are on the way.
 
 ![Puff, the notch character, in every mood](docs/images/puff.png)
 
-- **Ask from the notch** — streaming answers, Markdown, one-tap suggestions for anything you drop on it, and a ⌘K command palette.
-- **Hands-free voice** — talk, hear the answer, interrupt any time. Speech recognition runs on device.
-- **Live activities** — album art and a Siri-style wave for music (with a hover player and scrubbing), progress rings for timers, and quick pop-ups for volume, AirPods, charging, keep-awake and system health.
-- **Puff, the notch character** — a soft jelly blob with big glossy eyes and a sprout. Its eyes follow
-  your cursor; poke it and it gets grumpy, poke it three times and it goes dizzy, stroke it and hearts
-  float up. It hops for joy when a task finishes, gasps when you drag a file over, and now and then
-  peeks out of the notch to say hi. Tiny sounds are synthesised in-app (Settings › General to mute).
-- **Hidden menu bar icons** — the notch's "Menu bar" tab lists every menu bar icon, including the
-  ones the notch hides, and opens them for you.
-- **Mic & camera indicator** — the notch names the app using your microphone ("🎙 Zoom") and shows
-  when the camera is on.
-- **Ledge, the desktop companion** — picks are made on first launch, and your companion jumps out of
-  the notch and lands on your desktop. — a 3D character who walks on your windows, dances to your music, points at the notch when the assistant needs your OK, and dozes late at night. Three looks to pick from.
-- **Modules** — find files, clipboard history, shelf, notes, timers, calendar & reminders, music, system stats, screen time, image converter, AI-usage heatmap, screenshots with annotation, camera mirror.
-- **Private by design** — no account, no telemetry. Chats live in `~/Library/Application Support/OpenNotch`.
+## Private by design
+
+No account, no telemetry, no OpenNotch servers. Chats, memory and settings live in
+`~/Library/Application Support/OpenNotch`; API keys live in your Keychain. Weather uses Open-Meteo, and
+web fetches happen only when you ask for them.
 
 ## Install
 
-Download the latest `OpenNotch.dmg` from [Releases](../../releases), open it, and drag OpenNotch to Applications.
+1. **[Download OpenNotch.dmg](https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg)**, open it, and drag OpenNotch to Applications.
+2. **First launch:** builds are not yet notarised by Apple, so macOS will say it can't verify the app.
+   Open **System Settings › Privacy & Security**, scroll down and click **Open Anyway**. You only do this once.
+3. **Connect an AI** in Settings › AI.
 
-**First launch:** builds are not yet notarised by Apple, so macOS will say it can't verify the app.
-Open **System Settings › Privacy & Security**, scroll down and click **Open Anyway**. You only do this once.
-
-Requires macOS 14 Sonoma or later on a Mac with a notch (it also works on other Macs with a virtual notch).
+Requires macOS 14 Sonoma or later on Apple silicon (Macs without a notch get a virtual one).
 
 ## Build from source
 
@@ -97,4 +139,5 @@ Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE). Bundles [three.js](https://threejs.org) (MIT).
+[MIT](LICENSE). Bundles [three.js](https://threejs.org) (MIT). Provider logos on the website are from
+[Simple Icons](https://simpleicons.org) (CC0) and belong to their owners.
