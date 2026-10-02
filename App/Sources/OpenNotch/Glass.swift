@@ -25,7 +25,7 @@ struct NotchSurface: View {
             ZStack(alignment: .top) {
                 NotchShape(radius: radius)
                     .fill(Color.clear)
-                    .glassEffect(Glass.regular.tint(.black.opacity(0.55)), in: NotchShape(radius: radius))
+                    .glassEffect(Glass.regular.tint(.black.opacity(0.68)), in: NotchShape(radius: radius))
                 // Solid black for the notch's own height, then a short fade into the glass.
                 let fade: CGFloat = 34
                 Rectangle()

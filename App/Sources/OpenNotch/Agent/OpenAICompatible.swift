@@ -13,6 +13,11 @@ struct OpenAICompatibleProvider: ChatProvider {
     var supportsImages = true
     /// Ask the server to include reasoning in the stream (OpenRouter).
     var requestReasoning = false
+    /// Output cap to send. OpenRouter otherwise reserves the model's whole maximum
+    /// (e.g. 131k tokens) against the balance and refuses low-credit accounts.
+    var maxTokens: Int? = nil
+    /// Characters of conversation to send (local servers often run 4–8k-token contexts).
+    var contextChars = 300_000
 
     var isConnected: Bool { true }
     var supportsTools: Bool { true }
@@ -24,6 +29,7 @@ struct OpenAICompatibleProvider: ChatProvider {
             "messages": [["role": "system", "content": system]] + messages.compactMap(Self.wire(supportsImages)),
         ]
         if usageInStream { body["stream_options"] = ["include_usage": true] }
+        if let maxTokens { body["max_tokens"] = maxTokens }
         if requestReasoning { body["reasoning"] = ["exclude": false] }
         if !tools.isEmpty {
             body["tools"] = tools.map { t in

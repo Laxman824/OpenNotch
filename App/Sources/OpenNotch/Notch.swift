@@ -122,6 +122,7 @@ final class NotchController: ObservableObject {
         screenFrame = screen.frame
         panel.setFrame(NSRect(x: screenFrame.midX - windowSize.width / 2, y: screenFrame.maxY - windowSize.height,
                               width: windowSize.width, height: windowSize.height), display: true)
+        layoutPerch()
         AppLog.write("layout: \(hasNotch ? "notch" : "no notch") \(Int(notchSize.width))x\(Int(notchSize.height)) on \(Int(screenFrame.width))x\(Int(screenFrame.height))")
     }
 
@@ -129,18 +130,36 @@ final class NotchController: ObservableObject {
     /// while the agent is working so there's somewhere to show status.
     var collapsedSize: CGSize {
         let grow: CGFloat = hovering ? 14 : 0
-        return CGSize(width: notchSize.width + (hasLiveActivity ? 2 * earWidth : 0) + grow,
+        let ears = hasLiveActivity ? 2 * earWidth : (showsPerch ? 2 * perchEarWidth : 0)
+        return CGSize(width: notchSize.width + ears + grow,
                       height: notchSize.height + (hovering ? 4 : 0))
     }
 
     /// Something worth showing in the closed notch's ears.
     var hasLiveActivity: Bool {
         hud != nil || (backend?.busy ?? false) || !(backend?.approvals.isEmpty ?? true)
-            || (handsFree?.isOn ?? false) || hub?.timers.kind != nil
+            || (handsFree?.isOn ?? false) || (backend?.unseenAnswer ?? false) || hub?.timers.kind != nil
             || (backend?.nowPlaying.playing ?? false) || KeepAwake.shared.isOn || privacy.active
     }
 
     enum EarActivity { case hud, agent, timer, music, privacy, awake, none }
+
+    private var perchHost: NSView?
+
+    /// Keep the perch's own view over the closed notch (geometry changes with the display).
+    func layoutPerch() {
+        guard let v = perchHost, let box = v.superview?.bounds else { return }
+        let w = notchSize.width + 2 * perchEarWidth
+        v.frame = NSRect(x: (box.width - w) / 2, y: box.height - notchSize.height, width: w, height: notchSize.height)
+        v.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
+    }
+
+    /// Puff sits beside the notch when nothing else needs the ears (pref `character.perch`).
+    var showsPerch: Bool {
+        !hasLiveActivity && Prefs.on(Prefs.characterPerch)
+            && (UserDefaults.standard.string(forKey: "character.style") ?? "puff") == "puff"
+    }
+    var perchEarWidth: CGFloat { max(40, notchSize.height + 8) }
 
     /// Apps using the microphone / camera right now (PrivacyMonitor).
     @Published var privacy = PrivacyState()
@@ -170,7 +189,8 @@ final class NotchController: ObservableObject {
     /// What the ears are showing, highest priority first.
     var earActivity: EarActivity {
         if hud != nil { return .hud }
-        if (backend?.busy ?? false) || !(backend?.approvals.isEmpty ?? true) || (handsFree?.isOn ?? false) { return .agent }
+        if (backend?.busy ?? false) || !(backend?.approvals.isEmpty ?? true) || (handsFree?.isOn ?? false)
+            || (backend?.unseenAnswer ?? false) { return .agent }
         if hub?.timers.kind != nil { return .timer }
         if backend?.nowPlaying.playing ?? false { return .music }
         if privacy.active { return .privacy }
@@ -199,14 +219,30 @@ final class NotchController: ObservableObject {
         case .peek: return peekSize
         case .player: return CGSize(width: max(notchSize.width + 2 * 112, 440), height: notchSize.height + 124)
         case .mirror: return CGSize(width: 380, height: notchSize.height + 250)
-        case .peekaboo: return CGSize(width: notchSize.width + 20, height: notchSize.height + 64)
+        case .peekaboo: return CGSize(width: notchSize.width + (peekLine == nil ? 20 : 250), height: notchSize.height + 64)
         case .alert: return CGSize(width: max(notchSize.width + 280, 480), height: notchSize.height + 64)
         case .expanded: return expandedSize
         }
     }
 
-    func show(root: some View) {
-        panel.contentView = NSHostingView(rootView: root)
+    func show(root: some View, perch: some View) {
+        let host = NSHostingView(rootView: root)
+        // The panel has a fixed size: don't derive window min/max/intrinsic sizes from the content.
+        host.sizingOptions = []
+        // The perch gets its own small hosting view on top: its frames then re-render a
+        // 300×38 pt view instead of the whole notch window (≈ 18% → a few % CPU).
+        let container = NSView(frame: NSRect(origin: .zero, size: windowSize))
+        container.wantsLayer = true
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        let perchHost = PassThroughHostingView(rootView: AnyView(perch))
+        perchHost.sizingOptions = []
+        perchHost.wantsLayer = true
+        container.addSubview(perchHost)
+        self.perchHost = perchHost
+        layoutPerch()
+        panel.contentView = container
         panel.orderFrontRegardless()
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -301,11 +337,13 @@ final class NotchController: ObservableObject {
 
     private var playerHoldUntil = Date.distantPast
     private var peekabooUntil = Date.distantPast
+    /// What Puff says while peeking (nil = just a wave).
+    @Published private(set) var peekLine: String?
     private var nextPeek = Date().addingTimeInterval(150)
 
     /// Puff pops out of the notch, looks around, and slips back in.
     func peekaboo(hold: TimeInterval = 3.6) {
-        guard mode == .collapsed, !hasLiveActivity else { return }
+        guard mode == .collapsed, !hasLiveActivity else { return }    // the perch is fine — Puff hops down from it
         peekabooUntil = Date().addingTimeInterval(hold)
         SoundFX.play(.peek)
         withAnimation(Motion.peek) { mode = .peekaboo }
@@ -314,12 +352,18 @@ final class NotchController: ObservableObject {
     /// Now and then, while you're at the Mac and the notch is idle.
     private func maybePeek() {
         guard Date() >= nextPeek else { return }
-        nextPeek = Date().addingTimeInterval(Double.random(in: 12...25) * 60)
+        nextPeek = Date().addingTimeInterval(Double.random(in: PresenceLogic.peekEvery(Liveliness.current)) * 60)
         let idleFor = min(CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved),
                           CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown))
         guard Prefs.on(Prefs.characterPeek), UserDefaults.standard.string(forKey: "character.style") ?? "puff" == "puff",
-              idleFor < 60, !fileDrag else { return }
-        peekaboo()
+              idleFor < 60, !fileDrag,
+              !PresenceLogic.quietHours(Calendar.current.component(.hour, from: Date())), !privacy.active,
+              !Presence.frontmostIsFullScreen() else { return }
+        // Friendly and lively: say something that fits the moment.
+        let c = Calendar.current.dateComponents([.hour, .minute, .weekday], from: Date())
+        peekLine = Liveliness.current == .calm ? nil
+            : PresenceLogic.peekLine(hour: c.hour ?? 12, minute: c.minute ?? 0, weekday: c.weekday ?? 1, seed: Int.random(in: 0..<1000))
+        peekaboo(hold: peekLine == nil ? 3.6 : 4.8)
     }
 
     /// Camera mirror: asks for the camera the first time (with the notch out

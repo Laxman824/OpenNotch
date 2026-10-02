@@ -27,11 +27,17 @@
 - MCP client (stdio, `mcpServers` config, autoApprove).
 - `--selftest` (one live turn) and `--checks` (42 in-process assertions).
 
+## Phase 3c — smarter agent ✅ (checks; not yet live)
+- Time-aware messages, parallel read-only tools, external-content fence, allow-for-chat approvals.
+- Memory: suggested facts (approve to save), `recall`, Settings › AI › Memory; `search_chats`; long-chat summaries.
+- Brave/Tavily web search, main-content page text, context-aware router, Apple on-device read-only tools.
+- Follow-up chips, "Ready" ear, tool-using morning brief, Mail.app inbox check, `--eval` set (24 cases).
+
 ## Phase 3b — next
 - Computer use (click/type in apps, with the cursor-courtesy rules from the original).
-- Scheduler ("every morning…") with results in the notch; tool subsetting to cut prompt tokens on
-  free tiers (~3k tokens of tool schemas per request today); Apple on-device tool calling.
-- Personal document search (SQLite FTS5), memory auto-learning, meeting transcription.
+- Personal document search (SQLite FTS5), meeting transcription.
+- Background jobs that keep running while you start another chat (today a new chat stops the turn).
+- Grow the eval set from real traces; track scores per model.
 
 ## Phase 4 — Onboarding & avatars
 - First-run flow: welcome → pick your companion (live 3D previews) → pick your AI → permissions.

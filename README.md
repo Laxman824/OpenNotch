@@ -37,11 +37,17 @@ and edits files, runs shell commands, searches the web, controls music, looks at
 timers and remembers your preferences. You can watch it **think** and follow its **plan** live, and
 every chat is kept in **history** (⌘Y).
 
+It gets to know you without snooping: after a chat it may **suggest a fact to remember** ("Lives in
+Lisbon"), which is saved only when you click Save (see and delete them in Settings › AI › Memory). It can
+**search your earlier chats** ("what did we decide about the logo?"), keeps long chats coherent by
+**summarising** what scrolled out of its context, runs independent lookups **in parallel**, and ends
+answers with **one-tap follow-ups**. Ask it something and close the notch: the ears say **Ready** when it's done.
+
 ## Nothing risky without your OK
 
 | | |
 |---|---|
-| <img src="docs/images/approval.jpg" alt="NEEDS YOUR OK — the notch glows yellow; Bee points at it" width="100%"> | Commands, file changes, calendar edits, drafts and connector tools wait for you. The notch glows yellow and chimes; in hands-free mode it asks out loud — say "yes" or "no". No answer in five minutes means no. **It drafts email; it never sends.** |
+| <img src="docs/images/approval.jpg" alt="NEEDS YOUR OK — the notch glows yellow; Bee points at it" width="100%"> | Commands, file changes, calendar edits, drafts and connector tools wait for you. The notch glows yellow and chimes; in hands-free mode it asks out loud — say "yes" or "no". No answer in five minutes means no. For repeated steps, **Allow for this chat** covers one program (say, `git`) or one project folder until you switch chats. **It drafts email; it never sends.** Text from web pages and emails is handed to the AI as information, never as instructions. |
 | <img src="docs/images/voice.jpg" alt="Hands-free: Hey Ledge, what's on my calendar?" width="100%"> | **Hands-free voice.** Say "Hey Ledge…", hear the answer, interrupt any time. Speech recognition runs on your Mac. |
 | <img src="docs/images/proactive.jpg" alt="Proactive: Design review in 10 min — Join" width="100%"> | **Proactive, never pushy.** A morning brief, "meeting in 10 minutes — Join", "3 emails may need a reply — Draft replies". Proposals never act on their own. |
 
@@ -71,8 +77,11 @@ Open **Settings › AI** (notch menu › Settings…) and pick one:
 | **Sign in with OpenRouter** | An OpenRouter account — one login gives you Claude, GPT, Gemini and free models, with your own spending limit |
 | **Paste an API key** | A key from OpenAI, Anthropic, Google Gemini (free tier available) or Groq — stored in your Keychain |
 | **Ollama / LM Studio** | Either app running with a model downloaded — fully local and free |
-| **Apple on-device** | macOS 26 with Apple Intelligence turned on — no setup, offline |
+| **Apple on-device** | macOS 26 with Apple Intelligence turned on — no setup, offline, with read-only tools (weather, calendar, reminders, memory) |
 | Sign in with ChatGPT | Coming once OpenAI issues OpenNotch its client ID |
+
+**Web search** works with no key (DuckDuckGo). For steadier results, pick **Brave Search** or **Tavily**
+in Settings › AI › Web search and paste a key; DuckDuckGo remains the fallback.
 
 ### Connectors (MCP)
 
@@ -86,7 +95,11 @@ approval unless you list them under `"autoApprove"`.
 
 **Puff** is a soft jelly blob that lives in the notch. Its eyes follow your cursor; poke it and it gets
 grumpy, poke it three times and it goes dizzy, stroke it and hearts float up. It hops for joy when a task
-finishes and now and then peeks out to say hi. **Ledge, Bee or Cat** jumps out of the notch on first launch
+finishes and now and then peeks out to say hi. When the notch is closed, Puff sits beside it with little arms
+and feet — waving, stretching, typing along with you, dancing to your music, napping when you're away, and
+sometimes walking behind the camera to the other side. Ledge also **checks in**: copy an error and it offers to
+explain it, work an hour straight and it suggests a break, come back and it catches you up (Settings › General ›
+Liveliness: Calm, Friendly or Lively). **Ledge, Bee or Cat** jumps out of the notch on first launch
 and walks on your windows, dances to your music and points at the notch when the assistant needs your OK.
 More companions are on the way.
 
@@ -123,6 +136,9 @@ node Desktop/test/sim.mjs   # desktop companion simulation
 
 # One real agent turn against a provider (key from the environment, never stored):
 OPENNOTCH_KEY=… App/.build/debug/OpenNotch --selftest groq        # or openai, anthropic, gemini, openrouter, ollama …
+
+# The eval set: 24 everyday prompts, scored by the tools the model picks (nothing real is changed):
+App/.build/debug/OpenNotch --eval openrouter                       # key from $OPENNOTCH_KEY or the one saved in Settings
 ```
 
 ## Command line

@@ -10,6 +10,7 @@ enum NotchAlert: Equatable {
     case capture(String)
     case info(icon: String, text: String)
     case proposal(Proposal)
+    case nudge(Nudge)
 }
 
 @MainActor
@@ -154,7 +155,7 @@ struct TimersView: View {
                         .animation(.linear(duration: 0.5), value: store.progress)
                     VStack(spacing: 2) {
                         Text(store.kind == nil ? "--:--" : TimerStore.clock(store.remaining))
-                            .font(.system(size: 30, weight: .semibold, design: .rounded).monospacedDigit())
+                            .font(Typo.numeric(34, weight: .bold))
                         Text(store.kind.map { $0 == .pomodoro ? (store.onBreak ? "Break" : "Focus · \(store.cycles) done") : $0.rawValue } ?? "Ready")
                             .font(.system(size: 11)).foregroundStyle(Theme.secondary)
                     }
@@ -179,7 +180,7 @@ struct TimersView: View {
             .frame(maxWidth: .infinity)
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("Durations").font(.system(size: 12, weight: .semibold))
+                Text("Durations").eyebrow()
                 Stepper("Focus  \(store.focusMinutes) min", value: $store.focusMinutes, in: 5...90, step: 5)
                 Stepper("Break  \(store.breakMinutes) min", value: $store.breakMinutes, in: 1...30)
                 Stepper("Timer  \(store.countdownMinutes) min", value: $store.countdownMinutes, in: 1...180)
@@ -249,6 +250,8 @@ struct AlertPeek: View {
                 case let .proposal(p):
                     ProposalCard(proposal: p, engine: hub.proactive, compact: true)
                         .padding(.horizontal, -8)
+                case let .nudge(n):
+                    NudgeView(nudge: n, backend: backend)
                 case let .info(icon, text):
                     Image(systemName: icon).font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(LinearGradient(colors: [Theme.glow[0], Theme.glow[2]],
@@ -474,7 +477,7 @@ struct CalendarView: View {
                 .frame(maxWidth: .infinity)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Reminders").font(.system(size: 13, weight: .semibold))
+                    Text("Reminders").eyebrow()
                     HStack(spacing: 6) {
                         TextField("New reminder", text: $newReminder).textFieldStyle(.plain).font(.system(size: 12))
                             .onSubmit(add)

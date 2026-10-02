@@ -280,7 +280,7 @@ enum ToolKit {
             run: { a in await fetchURL(a) }),
         AgentTool(
             name: "web_search",
-            description: "Search the web (DuckDuckGo). Returns titles, links and snippets — then fetch_url the best ones.",
+            description: "Search the web. Returns titles, links and snippets — then fetch_url the best ones.",
             schema: Schema.object(["query": Schema.string("Search query")], required: ["query"]),
             risk: .read, verb: "Searching the web", detail: { $0.str("query") ?? "" }, preview: { $0.str("query") ?? "" },
             run: { a in await webSearch(a) }),
@@ -317,9 +317,10 @@ enum ToolKit {
         var s = html
         let title = s.range(of: #"<title[^>]*>([\s\S]*?)</title>"#, options: [.regularExpression, .caseInsensitive])
             .map { String(s[$0]).replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression) } ?? ""
-        for tag in ["script", "style", "noscript", "svg", "nav", "footer", "header", "form"] {
+        for tag in ["script", "style", "noscript", "svg", "nav", "footer", "header", "form", "aside", "template", "iframe"] {
             s = s.replacingOccurrences(of: "<\(tag)[\\s\\S]*?</\(tag)>", with: " ", options: [.regularExpression, .caseInsensitive])
         }
+        s = mainContent(s)
         s = s.replacingOccurrences(of: #"<(br|/p|/div|/li|/h[1-6]|/tr)[^>]*>"#, with: "\n", options: [.regularExpression, .caseInsensitive])
         s = s.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
         s = decodeEntities(s)
@@ -327,6 +328,25 @@ enum ToolKit {
             .replacingOccurrences(of: #"\n\s*\n+"#, with: "\n\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return "# \(decodeEntities(title).trimmingCharacters(in: .whitespacesAndNewlines))\n\(url.absoluteString)\n\n\(s)"
+    }
+
+    /// The page's main block (<article>, <main>, role="main") when it holds most of the
+    /// readable text — drops menus, cookie banners and link lists around it.
+    static func mainContent(_ html: String) -> String {
+        func textLength(_ h: String) -> Int {
+            h.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).count
+        }
+        let total = textLength(html)
+        for pattern in [#"<article[\s>][\s\S]*</article>"#, #"<main[\s>][\s\S]*</main>"#,
+                        #"<div[^>]*role=["']main["'][\s\S]*</div>"#] {
+            if let r = html.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
+                let block = String(html[r])
+                let n = textLength(block)
+                if n >= 400 && Double(n) >= Double(total) * 0.35 { return block }
+            }
+        }
+        return html
     }
 
     static func decodeEntities(_ s: String) -> String {
@@ -341,6 +361,17 @@ enum ToolKit {
 
     static func webSearch(_ a: ToolArgs) async -> ToolOutcome {
         guard let q = a.str("query") else { return .fail("query is required") }
+        // A search API the user added a key for, else DuckDuckGo (also the fallback if the API fails).
+        if let engine = SearchEngine.active, let key = engine.key {
+            switch await engine.search(q, key: key) {
+            case .success(let rows) where !rows.isEmpty:
+                return ToolOutcome(ok: true, text: rows.prefix(8).enumerated().map { i, r in
+                    "\(i + 1). \(r.title)\n   \(r.url)\n   \(r.snippet)"
+                }.joined(separator: "\n"))
+            case .failure(let e): AppLog.write("web_search via \(engine.label) failed: \(e.localizedDescription)")
+            default: break
+            }
+        }
         var c = URLComponents(string: "https://html.duckduckgo.com/html/")!
         c.queryItems = [URLQueryItem(name: "q", value: q)]
         var req = URLRequest(url: c.url!)

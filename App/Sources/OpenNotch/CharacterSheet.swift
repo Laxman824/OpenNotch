@@ -5,6 +5,13 @@ import SwiftUI
 /// reaction, for reviewing the character without launching the app.
 @MainActor
 enum CharacterSheet {
+    static let perchPoses: [(String, PerchPose.Pose)] = [
+        ("idle", PerchPose.action(.idle, p: 0, t: 1000.3)), ("wave", PerchPose.action(.wave, p: 0.5, t: 1000.3)),
+        ("stretch", PerchPose.action(.stretch, p: 0.5, t: 1000.3)), ("yawn", PerchPose.action(.yawn, p: 0.5, t: 1000.3)),
+        ("kick", PerchPose.action(.kick, p: 0.5, t: 1000.17)), ("walk", PerchPose.action(.walk, p: 0.5, t: 1000.14)),
+        ("typing", PerchPose.typing(t: 1000.07)), ("dance", PerchPose.dance(t: 1000.1)), ("asleep", PerchPose.asleep()),
+    ]
+
     static func render(to path: String) -> Int32 {
         let palette = AvatarPalette.named(UserDefaults.standard.string(forKey: "avatarPalette") ?? "aurora")
         let t = 1000.3                                     // a moment with eyes open
@@ -38,6 +45,26 @@ enum CharacterSheet {
                     }
                 }
             }
+            Text("With a body — the perch beside the closed notch:").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.75))
+            HStack(spacing: 22) {
+                ForEach(Self.perchPoses, id: \.0) { p in
+                    VStack(spacing: 6) {
+                        PuffCanvas(size: 100, mood: p.1.mood ?? .idle, palette: palette, t: t, gaze: p.1.gaze ?? CGPoint(x: 0.3, y: 0.1),
+                                   limbs: p.1.limbs)
+                            .frame(width: 100, height: 100).offset(y: -p.1.bob * 100)
+                        Text(p.0).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.7))
+                    }
+                }
+            }
+            Text("At real size (38 pt notch):").font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+            HStack(spacing: 0) {
+                PuffCanvas(size: 35, mood: .idle, palette: palette, t: t, gaze: CGPoint(x: 0.5, y: 0.2),
+                           limbs: PerchPose.action(.wave, p: 0.5, t: t).limbs)
+                    .frame(width: 46, height: 38)
+                Color.black.frame(width: 209, height: 38)
+                Text("14m").font(Typo.numeric(11.5)).foregroundStyle(.white.opacity(0.85)).frame(width: 46, height: 38)
+            }
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.06)))
             Text("In the closed notch (22 pt):").font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
             HStack(spacing: 14) {
                 ForEach(0..<moods.count, id: \.self) { i in cell("", moods[i].1, moods[i].2, moods[i].3, moods[i].4, 22) }

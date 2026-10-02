@@ -46,6 +46,8 @@ enum ProviderEvent: Sendable {
     case usage(input: Int, output: Int)
     /// Complete provider content for the assistant turn (see ChatMessage.raw).
     case raw(String, source: String)
+    /// A tool the provider ran itself (Apple on-device calls tools inside its session) — shown, not re-run.
+    case ranTool(ToolCall, ok: Bool, result: String)
     case stop(reason: String)
 }
 
@@ -60,7 +62,13 @@ protocol ChatProvider: Sendable {
     var isConnected: Bool { get }
     var supportsTools: Bool { get }
     var supportsImages: Bool { get }
+    /// Roughly how much conversation (characters) to send — small for local models.
+    var contextChars: Int { get }
     func turn(system: String, messages: [ChatMessage], tools: [ToolSpec]) -> AsyncThrowingStream<ProviderEvent, Error>
+}
+
+extension ChatProvider {
+    var contextChars: Int { 300_000 }
 }
 
 /// Until the user connects an AI: a friendly explanation, streamed like a real answer.
@@ -102,7 +110,12 @@ enum HTTP {
         return URLSession(configuration: c)
     }()
 
-    static func json(_ obj: Any) -> Data { (try? JSONSerialization.data(withJSONObject: obj)) ?? Data() }
+    /// Any JSON value → data. Scalars ("1", true) are allowed; anything JSON can't hold gives empty data.
+    /// (JSONSerialization raises an Objective-C exception for those — `try?` can't catch it, the app would crash.)
+    static func json(_ obj: Any) -> Data {
+        guard JSONSerialization.isValidJSONObject([obj]) else { return Data() }
+        return (try? JSONSerialization.data(withJSONObject: obj, options: .fragmentsAllowed)) ?? Data()
+    }
 
     static func parse(_ text: String) -> [String: Any]? {
         guard let d = text.data(using: .utf8) else { return nil }

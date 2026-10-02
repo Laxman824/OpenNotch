@@ -8,6 +8,7 @@
 #                               media system screenTime convert usage captures chat
 #   opennotch --settings [tab]      open Settings ((general ai notch desktop voice permissions shortcuts))
 #   opennotch --awake [60|on|off]   keep the Mac awake (minutes, until off, or stop)
+#   opennotch --update              check for updates now
 #   opennotch -m mirror             camera mirror
 #   opennotch -t 10                 start a 10-minute timer (also: 90s, focus, stopwatch, pause, stop)
 # Put it on your PATH:  ln -s "$PWD/opennotch" /usr/local/bin/opennotch
@@ -19,6 +20,7 @@ case "${1:-}" in
   --closeup)      NOTCH_FORCE_NAME="dev.opennotch.closeup"; NOTCH_MODULE="${2:-0.35}"; set -- ;;
   --settings)     NOTCH_FORCE_NAME="dev.opennotch.settings"; NOTCH_MODULE="${2:-general}"; set -- ;;
   --awake)        NOTCH_FORCE_NAME="dev.opennotch.awake"; NOTCH_MODULE="${2:-toggle}"; set -- ;;
+  --update)       NOTCH_FORCE_NAME="dev.opennotch.update"; NOTCH_MODULE=""; set -- ;;
   -t|--timer)     NOTCH_FORCE_NAME="dev.opennotch.timer"; NOTCH_MODULE="${2:-25}"; set -- ;;
   -m|--module)    NOTCH_FORCE_NAME="dev.opennotch.module"; NOTCH_MODULE="${2:-chat}"; set -- ;;
 esac

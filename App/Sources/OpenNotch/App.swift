@@ -44,6 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         backend.onDone = { [weak self] _ in
             guard let self, self.notch.mode != .expanded, !self.handsFree.isOn else { return }
+            // Finished in the background: keep a "Ready" ear until the notch is opened.
+            self.backend.unseenAnswer = true
+            let finished = self.backend.lastDoneAt
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30 * 60) { [weak self] in
+                if self?.backend.lastDoneAt == finished { self?.backend.unseenAnswer = false }
+            }
             // Desktop Ledge says it in his bubble; one voice, not two.
             if self.desktop.isActive { return }
             Chime.done()
@@ -111,7 +117,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         notch.show(root: RootView(backend: backend, notch: notch, dictation: dictation, hub: hub, handsFree: handsFree)
             .environmentObject(hub)
-            .environmentObject(handsFree))
+            .environmentObject(handsFree),
+                   perch: PerchLayer(backend: backend, notch: notch, hub: hub))
 
         let keys = [
             HotKey(id: 1, name: "⌥Space") { [weak self] in Task { @MainActor in self?.notch.toggleFromHotkey() } },
@@ -189,8 +196,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Scheduled prompts ("every weekday at 9 …"): run when due and the agent is free.
         scheduleTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, !self.backend.busy, self.backend.aiConnected,
-                      let task = ScheduleStore.shared.takeDue().first else { return }
+                guard let self, !self.backend.busy, self.backend.aiConnected else { return }
+                guard let task = ScheduleStore.shared.takeDue().first else {
+                    self.backend.core.learnIfIdle()            // a quiet chat: anything worth remembering?
+                    return
+                }
                 self.backend.core.send(task.prompt, display: "⏰ " + task.prompt)
             }
         }
@@ -200,6 +210,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .replacingOccurrences(of: "∞", with: "Until you stop it")), for: 1.8)
         }
         backend.start()
+        Updater.shared.start()
+        Presence.shared.notch = notch
+        Presence.shared.backend = backend
+        Presence.shared.hub = hub
+        hub.clipboard.onCopied = { text in Presence.shared.copied(text) }
+        Presence.shared.start()
         ToolHost.hub = hub
         ToolHost.notch = notch
         Task { await MCPManager.shared.reload() }
@@ -284,6 +300,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        center.addObserver(forName: .init("dev.opennotch.update"), object: nil, queue: .main) { _ in
+            Task { @MainActor in Updater.shared.checkNow() }
+        }
         center.addObserver(forName: .init("dev.opennotch.settings"), object: nil, queue: .main) { n in
             let tab = SettingsTab(rawValue: (n.object as? String ?? "").lowercased()) ?? .general
             Task { @MainActor in SettingsWindow.shared.show(tab) }
@@ -316,7 +335,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ctx.notch = notch
         ctx.captures = hub.captures
         // Snapshot what you're working on the moment the notch opens.
-        notch.onOpen = { [weak ctx] in ctx?.refresh() }
+        notch.onOpen = { [weak ctx, weak self] in
+            ctx?.refresh()
+            if self?.backend.unseenAnswer == true {               // opened to see the result
+                self?.backend.unseenAnswer = false
+                self?.hub.module = .chat
+            }
+        }
 
         let pro = hub.proactive
         pro.backend = backend
@@ -330,6 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.hub.module = .chat
             self?.notch.expand(pinned: true)
         }
+        backend.core.onLearned = { [weak pro] facts in pro?.proposeMemory(facts) }
         hub.calendar.refreshAuth()
         pro.start()
 
@@ -410,6 +436,10 @@ struct OpenNotchMain {
         }
         if CommandLine.arguments.contains("--selftest") {
             SelfTest.start()
+            RunLoop.main.run()
+        }
+        if CommandLine.arguments.contains("--eval") {
+            Task { @MainActor in exit(await Evals.run()) }
             RunLoop.main.run()
         }
         let app = NSApplication.shared

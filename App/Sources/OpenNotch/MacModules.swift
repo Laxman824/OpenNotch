@@ -648,7 +648,7 @@ struct UsageView: View {
 
     private func stat(_ label: String, _ n: Int) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(compactNumber(n)).font(.system(size: 18, weight: .semibold, design: .rounded).monospacedDigit())
+            Text(compactNumber(n)).font(Typo.numeric(20, weight: .bold))
             Text(label).font(.system(size: 10)).foregroundStyle(Theme.tertiary)
         }
         .padding(10)

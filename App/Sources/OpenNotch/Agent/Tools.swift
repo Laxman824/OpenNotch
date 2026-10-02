@@ -147,11 +147,13 @@ enum ResultBudget {
 /// Long-term facts the user asked to remember. Local JSON, bounded.
 final class MemoryStore: @unchecked Sendable {
     static let shared = MemoryStore()
-    private let path = opennotchDir("") + "/memory.json"
+    private let path: String
     private let lock = NSLock()
     private var facts: [String: [String: String]] = [:]     // key → {value, updated}
 
-    init() {
+    /// `path` is overridable so checks never touch real memory.
+    init(path: String = opennotchDir("") + "/memory.json") {
+        self.path = path
         if let d = FileManager.default.contents(atPath: path),
            let f = try? JSONSerialization.jsonObject(with: d) as? [String: [String: String]] { facts = f }
     }
@@ -175,15 +177,30 @@ final class MemoryStore: @unchecked Sendable {
             .map { ($0.key, $0.value["value"] ?? "") }
     }
 
-    /// For the system prompt: newest first, capped.
-    func promptBlock(maxChars: Int = 4000) -> String {
+    /// For the system prompt: newest first, capped; the rest are a `recall` away.
+    func promptBlock(maxChars: Int = 2500) -> String {
         var out = ""
-        for f in all() {
+        let facts = all()
+        var shown = 0
+        for f in facts {
             let line = "- \(f.key): \(f.value)\n"
             if out.count + line.count > maxChars { break }
             out += line
+            shown += 1
         }
+        if shown < facts.count { out += "(\(facts.count - shown) older facts not shown — use recall to search them)\n" }
         return out
+    }
+
+    /// Facts whose key or text mention any of the query's words, best match first. Empty query = all.
+    func search(_ query: String) -> [(key: String, value: String)] {
+        let words = ChatSearch.terms(query)
+        let facts = all()
+        guard !words.isEmpty else { return facts }
+        return facts.map { f -> ((key: String, value: String), Int) in
+            let hay = (f.key.replacingOccurrences(of: "-", with: " ") + " " + f.value).lowercased()
+            return (f, words.filter { hay.contains($0) }.count)
+        }.filter { $0.1 > 0 }.sorted { $0.1 > $1.1 }.map(\.0)
     }
 
     private func save() {

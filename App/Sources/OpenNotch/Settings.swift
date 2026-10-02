@@ -18,6 +18,7 @@ enum Prefs {
     static let hudHealth = "hud.health"
     static let hudPrivacy = "hud.privacy"
     static let characterSounds = "character.sounds", characterPeek = "character.peek"
+    static let characterPerch = "character.perch"
     static let desktopDance = "desktop.dance", desktopReactions = "desktop.reactions", desktopSleep = "desktop.sleep"
     static let energySaver = "energy.saver"
     static let onboardingDone = "onboarding.done"
@@ -350,11 +351,34 @@ private struct PrefToggle: View {
     }
 }
 
+/// Settings › General › Updates.
+private struct UpdatesSection: View {
+    @ObservedObject private var updater = Updater.shared
+
+    var body: some View {
+        Section(title: "Updates") {
+            if Updater.available {
+                Toggle("Check for updates automatically (daily)", isOn: Binding(get: { updater.automatic },
+                                                                               set: { updater.automatic = $0 }))
+                    .font(.system(size: 12))
+                HStack {
+                    Text("You have OpenNotch \(updater.version).").font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+                    Spacer()
+                    Button("Check now") { updater.checkNow() }.disabled(!updater.canCheck).controlSize(.small)
+                }
+            } else {
+                Text("Updates are off in development builds.").font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+            }
+        }
+    }
+}
+
 private struct GeneralPane: View {
     @AppStorage("assistantName") private var name = "Ledge"
     @AppStorage("avatarPalette") private var palette = "aurora"
     @AppStorage("character.style") private var characterStyle = "puff"
     @AppStorage("handsfree.autostart") private var handsFreeAtLaunch = false
+    @AppStorage(Liveliness.pref) private var liveliness = Liveliness.lively.rawValue
     @ObservedObject private var policy = AnimationPolicy.shared
 
     var body: some View {
@@ -379,6 +403,8 @@ private struct GeneralPane: View {
             }
             PrefToggle("Character sounds", Prefs.characterSounds, sub: "Tiny boops when you poke, pet or celebrate")
             PrefToggle("Peek out of the notch", Prefs.characterPeek, sub: "Now and then Puff pops out to say hi while you work")
+            PrefToggle("Puff lives beside the notch", Prefs.characterPerch,
+                       sub: "Sits next to the closed notch with arms and feet — waves, stretches, dances to music, naps")
             HStack {
                 Text("Notch face colours").font(.system(size: 12.5, weight: .medium))
                 Spacer()
@@ -386,6 +412,18 @@ private struct GeneralPane: View {
                     ForEach(AvatarPalette.all) { Text($0.name).tag($0.id) }
                 }
                 .labelsHidden().frame(width: 180)
+            }
+            HStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Liveliness").font(.system(size: 12.5, weight: .medium))
+                    Text((Liveliness(rawValue: liveliness) ?? .lively).blurb)
+                        .font(.system(size: 11)).foregroundStyle(Theme.secondary)
+                }
+                Spacer()
+                Picker("", selection: $liveliness) {
+                    ForEach(Liveliness.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 210)
             }
             Toggle("Start hands-free at launch", isOn: $handsFreeAtLaunch).toggleStyle(.switch).controlSize(.small)
                 .font(.system(size: 12.5, weight: .medium))
@@ -410,6 +448,7 @@ private struct GeneralPane: View {
             }
             .accessibilityElement(children: .combine)
         }
+        UpdatesSection()
     }
 }
 
@@ -685,6 +724,82 @@ final class AIModel: ObservableObject {
     private func apply() { (NSApp.delegate as? AppDelegate)?.backend.reloadAI() }
 }
 
+/// Settings › AI › Web search: DuckDuckGo by default, or an API with a key.
+private struct SearchSection: View {
+    @State private var engine = SearchEngine.active
+    @State private var keyText = ""
+    @State private var saved = SearchEngine.allCases.filter { $0.key != nil }
+
+    var body: some View {
+        Section(title: "Web search") {
+            HStack {
+                Picker("", selection: Binding(get: { engine?.rawValue ?? "ddg" },
+                                              set: { engine = SearchEngine(rawValue: $0); SearchEngine.active = engine; keyText = "" })) {
+                    Text("DuckDuckGo (no key)").tag("ddg")
+                    ForEach(SearchEngine.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .labelsHidden().frame(width: 190)
+                if let e = engine {
+                    SecureField(saved.contains(e) ? "Saved — paste to replace" : "\(e.label) API key", text: $keyText)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(save)
+                    Button("Save", action: save).disabled(keyText.isEmpty)
+                }
+            }
+            HStack(spacing: 4) {
+                if let e = engine {
+                    Text(saved.contains(e) ? "Using \(e.label); falls back to DuckDuckGo if it fails." : "Add a key to use \(e.label).")
+                    if let url = e.keyPage { Link("Get a key ↗", destination: url) }
+                } else {
+                    Text("Free and keyless, but it can rate-limit. A Brave or Tavily key gives steadier results.")
+                }
+            }
+            .font(.system(size: 11)).foregroundStyle(Theme.secondary)
+        }
+    }
+
+    private func save() {
+        guard let e = engine, !keyText.isEmpty else { return }
+        Keychain.set(keyText.trimmingCharacters(in: .whitespacesAndNewlines), for: e.account)
+        keyText = ""
+        saved = SearchEngine.allCases.filter { $0.key != nil }
+    }
+}
+
+/// Settings › AI › Memory: what the assistant remembers, and whether it suggests new facts.
+private struct MemorySection: View {
+    @State private var facts = MemoryStore.shared.all()
+    @State private var learn = MemoryLearner.enabled
+
+    var body: some View {
+        Section(title: "Memory") {
+            Toggle("Suggest things to remember after a chat (you approve each one)", isOn: $learn)
+                .font(.system(size: 12))
+                .onChange(of: learn) { _, v in UserDefaults.standard.set(v, forKey: MemoryLearner.pref) }
+            if facts.isEmpty {
+                Text("Nothing saved yet. Tell Ledge something about you, or say “remember that…”.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+            }
+            ForEach(facts.prefix(60), id: \.key) { f in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(f.key).font(.system(size: 11.5, weight: .semibold)).frame(width: 120, alignment: .leading).lineLimit(1)
+                    Text(f.value).font(.system(size: 11.5)).foregroundStyle(Theme.secondary).lineLimit(2)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button { _ = MemoryStore.shared.forget(f.key); facts = MemoryStore.shared.all() } label: {
+                        Image(systemName: "trash").font(.system(size: 10.5))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Theme.tertiary).help("Forget this")
+                }
+            }
+            if facts.count > 60 {
+                Text("+ \(facts.count - 60) more").font(.system(size: 11)).foregroundStyle(Theme.tertiary)
+            }
+        }
+        .onAppear { facts = MemoryStore.shared.all() }
+    }
+}
+
 private struct AIPane: View {
     @StateObject private var m = AIModel()
     @ObservedObject private var mcp = MCPManager.shared
@@ -764,6 +879,9 @@ private struct AIPane: View {
                 }
             }
         }
+
+        SearchSection()
+        MemorySection()
 
         Section(title: "Connectors (MCP)") {
             if mcp.status.isEmpty {

@@ -6,7 +6,7 @@ import SwiftUI
 /// themselves** — the primary action runs only when you click it (the
 /// "propose, don't act" stance from plan_new_personal_agent.md).
 struct Proposal: Identifiable, Codable, Equatable {
-    enum Kind: String, Codable { case brief, meeting, inbox }
+    enum Kind: String, Codable { case brief, meeting, inbox, memory }
     var id: String                     // stable per source item → natural de-duplication
     var kind: Kind
     var title: String
@@ -23,6 +23,7 @@ struct Proposal: Identifiable, Codable, Equatable {
         case .brief: return "sun.max.fill"
         case .meeting: return "video.fill"
         case .inbox: return "envelope.badge.fill"
+        case .memory: return "brain"
         }
     }
 }
@@ -53,6 +54,7 @@ final class ProactiveEngine: ObservableObject {
     private var seen: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "proactive.seen") ?? [])
     private var lastPresented = Date.distantPast
     private var lastInboxCheck = Date.distantPast
+    private var lastBriefFailure = Date.distantPast
     private let store = opennotchDir("") + "/proposals.json"
 
     func start() {
@@ -114,10 +116,12 @@ final class ProactiveEngine: ObservableObject {
         // at 8:00, you still get it when you open the lid at 9:15.
         guard !briefRunning, backend?.busy == false else { return }
         guard force || (!seen.contains(id) && hour >= briefHour && hour < briefHour + 3) else { return }
+        // No AI yet, or it failed recently: don't retry every minute (each try is a paid request).
+        guard force || (backend?.aiConnected == true && now.timeIntervalSince(lastBriefFailure) > 30 * 60) else { return }
         briefRunning = true
         seen.insert(id); persistSeen()
         let prompt = briefPrompt(now)
-        backend?.oneshot(prompt) { [weak self] result in
+        backend?.oneshotWithTools(prompt, tools: Self.briefTools) { [weak self] result in
             guard let self else { return }
             self.briefRunning = false
             switch result {
@@ -128,7 +132,8 @@ final class ProactiveEngine: ObservableObject {
                                   expires: cal.startOfDay(for: now).addingTimeInterval(24 * 3600)), present: true)
             case .failure(let msg):
                 AppLog.write("brief failed: \(msg)")
-                self.seen.remove(id); self.persistSeen()           // try again next tick
+                self.lastBriefFailure = Date()
+                self.seen.remove(id); self.persistSeen()           // try again in 30 min (still within the window)
             }
         }
     }
@@ -148,7 +153,8 @@ final class ProactiveEngine: ObservableObject {
                 parts.append("Reminders due today or overdue:\n" + due.prefix(10).map { "- \($0.title ?? "")" }.joined(separator: "\n"))
             }
         }
-        parts.append("Check my unread email from the last day (use the Gmail tools) and tell me what needs a reply. "
+        parts.append("Check my unread email from the last day with mail_recent (read any that look important with "
+                     + "mail_read) and tell me what needs a reply. If you know my city (recall home-city), add the weather. "
                      + "Keep the whole brief under 150 words: first the schedule, then what needs me, then one suggestion for the day. "
                      + "Don't send or draft anything.")
         return parts.joined(separator: "\n\n")
@@ -168,9 +174,9 @@ final class ProactiveEngine: ObservableObject {
                 title: fresh.count == 1 ? "\(names[0]) may need a reply" : "\(fresh.count) emails may need a reply",
                 detail: fresh.prefix(3).map { $0.subject }.joined(separator: " · "),
                 actionLabel: "Draft replies",
-                prompt: "These unread emails may need a reply:\n\(list)\n\nRead each one. For those that genuinely need a response, "
-                    + "write a short reply in my voice and save it as a Gmail draft (gmail_draft). Do not send anything. "
-                    + "Then list what you drafted and what you skipped.",
+                prompt: "These unread emails may need a reply:\n\(list)\n\nRead each one with mail_read. For those that genuinely "
+                    + "need a response, write a short reply in my voice and open it as a draft with mail_draft (I review and send it "
+                    + "myself). Do not send anything. Then list what you drafted and what you skipped.",
                 url: nil, body: nil, expires: Date().addingTimeInterval(12 * 3600)), present: true)
         }
     }
@@ -196,7 +202,7 @@ final class ProactiveEngine: ObservableObject {
 
     /// The only place a proposal causes anything to happen — on a click.
     func act(_ p: Proposal) {
-        if !(p.kind == .meeting && p.url != nil) { openChat?() }
+        if !(p.kind == .meeting && p.url != nil) && p.kind != .memory { openChat?() }
         switch p.kind {
         case .brief:
             if let text = p.body { backend?.showLocalExchange(user: "Morning brief", reply: text) }
@@ -205,9 +211,32 @@ final class ProactiveEngine: ObservableObject {
             else if let prompt = p.prompt { backend?.send(prompt) }
         case .inbox:
             if let prompt = p.prompt { backend?.send(prompt) }
+        case .memory:
+            for f in Self.facts(p) { MemoryStore.shared.remember(f.key, f.fact) }
+            backend?.notice("Saved to memory — Settings › AI › Memory shows everything I remember.")
         }
         dismiss(p)
     }
+
+    /// Facts the assistant noticed in a chat; saved only if you click Save.
+    func proposeMemory(_ facts: [(key: String, fact: String)]) {
+        guard !facts.isEmpty, let json = try? JSONSerialization.data(withJSONObject: facts.map { ["key": $0.key, "fact": $0.fact] }),
+              let body = String(data: json, encoding: .utf8) else { return }
+        proposals.removeAll { $0.kind == .memory }                 // newest suggestion replaces an unanswered one
+        add(Proposal(id: "memory:\(Int(Date().timeIntervalSince1970))", kind: .memory,
+                     title: facts.count == 1 ? "Remember this about you?" : "Remember \(facts.count) things about you?",
+                     detail: facts.map(\.fact).joined(separator: " · "),
+                     actionLabel: "Save", prompt: nil, url: nil, body: body,
+                     expires: Date().addingTimeInterval(3 * 24 * 3600)), present: false)
+    }
+
+    static func facts(_ p: Proposal) -> [(key: String, fact: String)] {
+        guard let b = p.body, let arr = try? JSONSerialization.jsonObject(with: Data(b.utf8)) as? [[String: String]] else { return [] }
+        return arr.compactMap { d in d["key"].flatMap { k in d["fact"].map { (k, $0) } } }
+    }
+
+    /// What the morning brief may look at (read-only).
+    static let briefTools: Set<String> = ["calendar_events", "reminders_list", "mail_recent", "mail_read", "weather", "recall"]
 
     /// "Prep me" for a meeting that has a join link (secondary action).
     func prep(_ p: Proposal) {
@@ -315,7 +344,7 @@ struct ForYouSection: View {
         if !engine.proposals.isEmpty || engine.briefRunning {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Text("FOR YOU").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.tertiary)
+                    Text("For you").eyebrow()
                     if engine.briefRunning {
                         ProgressView().controlSize(.mini)
                         Text("preparing your brief…").font(.system(size: 10)).foregroundStyle(Theme.tertiary)

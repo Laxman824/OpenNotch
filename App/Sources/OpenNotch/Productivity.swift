@@ -25,6 +25,8 @@ final class ClipboardStore: ObservableObject {
     private var ignoreChange = -1
     private var suppressUntil = Date.distantPast
     private var timer: Timer?
+    /// Text you just copied (not restored history, not our own writes) — Ledge may offer help.
+    var onCopied: ((String) -> Void)?
     private let indexPath = opennotchDir("clips") + "/index.json"
     private let limit = 150
 
@@ -72,6 +74,7 @@ final class ClipboardStore: ObservableObject {
         if let s = pb.string(forType: .string), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let isLink = s.range(of: #"^\s*https?://\S+\s*$"#, options: .regularExpression) != nil
             insert(Clip(kind: isLink ? .link : .text, text: String(s.prefix(100_000)), app: app))
+            onCopied?(s)
         }
     }
 

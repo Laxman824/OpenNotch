@@ -107,6 +107,8 @@ struct Approval: Identifiable, Equatable {
     let preview: String
     /// What hands-free says out loud ("I need your OK to run a command: …").
     var spoken: String = ""
+    /// "Allow git in this chat" — nil when this call can't be pre-approved.
+    var allowLabel: String? = nil
 }
 
 /// The UI's view of the assistant: transcript, busy state, approvals,
@@ -123,6 +125,11 @@ final class Backend: ObservableObject {
     @Published var lastTool: String = ""
     @Published var lastAnswer: String = ""
     @Published var attachments: [Attachment] = []
+    /// An answer finished while the notch was closed and hasn't been looked at:
+    /// the ears say "Ready" until the notch opens.
+    @Published var unseenAnswer = false
+    /// Suggested next prompts after the last answer (chips under it).
+    @Published var followUps: [String] = []
     @Published var turnStarted: Date? = nil
     /// (done, total) of the current plan while a turn runs — the closed notch shows "Step 2/5".
     @Published var planProgress: (done: Int, total: Int)? = nil
@@ -201,11 +208,11 @@ final class Backend: ObservableObject {
         var context: [String] = []
         let files = attachments.filter { $0.kind == .file }.map(\.value)
         if !files.isEmpty {
-            context.append("Attached files (read them with the right tool — read_file, read_pdf, read_docx or read_image):\n"
+            context.append("Attached files (read each with read_file — it handles text, code, PDF, Word and images):\n"
                            + files.map { "- \($0)" }.joined(separator: "\n"))
         }
         for shot in attachments where shot.kind == .screenshot {
-            context.append("A screenshot of my screen right now is at \(shot.value) — open it with read_image before answering.")
+            context.append("A screenshot of my screen right now is at \(shot.value) — it's attached to this message (or open it with read_file).")
         }
         for sel in attachments where sel.kind == .selection {
             context.append("Text I have selected\(selectionSource.map { " in \($0)" } ?? ""):\n```\n\(sel.value.prefix(20000))\n```")
@@ -265,6 +272,7 @@ final class Backend: ObservableObject {
     /// Show an exchange that didn't go through the agent, tell the agent about
     /// it (so follow-ups work), and let hands-free speak it.
     func showLocalExchange(user: String, reply: String, remember original: String? = nil) {
+        followUps = []
         add(.user, user)
         add(.assistant, reply)
         lastAnswer = reply
@@ -292,10 +300,39 @@ final class Backend: ObservableObject {
         }
     }
 
+    /// A one-off prompt that may use read-only tools (the morning brief reads calendar, mail, weather).
+    func oneshotWithTools(_ prompt: String, tools: Set<String>, _ done: @escaping (CallResult) -> Void) {
+        Task {
+            do { done(.success(try await core.completeWithTools(prompt, toolNames: tools))) }
+            catch { done(.failure(error.localizedDescription)) }
+        }
+    }
+
     struct Mail { let id: String; let from: String; let subject: String }
 
-    /// Emails that need a reply — needs a mail connector (MCP, phase 3). None yet.
-    func inboxNeedingReply(_ done: @escaping ([Mail]?) -> Void) { done(nil) }
+    /// Unread Mail.app messages from the last day that look like they're from a person.
+    /// Only when Mail automation is already allowed — a background check never prompts.
+    func inboxNeedingReply(_ done: @escaping ([Mail]?) -> Void) {
+        guard ContextGrabber.automationStatus("com.apple.mail") == noErr,
+              let tool = DailyTools.mail.first(where: { $0.name == "mail_recent" }) else { done(nil); return }
+        Task {
+            let o = await Task.detached { await tool.run(ToolArgs(json: #"{"days":1,"unread_only":true}"#)) }.value
+            done(o.ok ? Self.parseMailRows(o.text) : nil)
+        }
+    }
+
+    /// mail_recent rows ("- [id 12] ● Ann <a@x.com> — Subject (2026-10-02 09:14)") → people's mail.
+    nonisolated static func parseMailRows(_ text: String) -> [Mail] {
+        let rx = try? NSRegularExpression(pattern: #"^- \[id (\d+)\] (?:● )?(.+?) — (.*) \(\d{4}-\d\d-\d\d \d\d:\d\d\)$"#)
+        let robots = ["noreply", "no-reply", "donotreply", "notification", "newsletter", "mailer-daemon", "updates@", "news@", "marketing"]
+        return text.split(separator: "\n").compactMap { line -> Mail? in
+            let s = String(line), ns = s as NSString
+            guard let m = rx?.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)) else { return nil }
+            let from = ns.substring(with: m.range(at: 2))
+            guard !robots.contains(where: { from.lowercased().contains($0) }) else { return nil }
+            return Mail(id: ns.substring(with: m.range(at: 1)), from: from, subject: ns.substring(with: m.range(at: 3)))
+        }
+    }
 
     // MARK: music
 
@@ -365,9 +402,9 @@ final class Backend: ObservableObject {
     func deleteChat(_ id: String) { core.deleteChat(id) }
     func newChat() { core.newChat() }
 
-    func answer(_ approval: Approval, allow: Bool) {
+    func answer(_ approval: Approval, allow: Bool, forChat: Bool = false) {
         approvals.removeAll { $0.id == approval.id }
-        core.approve(id: approval.id, allow: allow)
+        core.approve(id: approval.id, allow: allow, forChat: forChat)
     }
 
     // MARK: agent events
@@ -384,6 +421,7 @@ final class Backend: ObservableObject {
             applyStatus(ev)
         case "user":
             planProgress = nil
+            followUps = []
             let injected = ev["injected"] as? Bool ?? false
             add(.user, (injected ? "↪ " : "") + (ev["text"] as? String ?? ""))
             if !injected { turnHadText = false; lastTool = ""; turnStarted = Date() }
@@ -442,7 +480,8 @@ final class Backend: ObservableObject {
             if state == "running" { onToolStarted?(verb.isEmpty ? (ev["detail"] as? String ?? "") : verb) }
         case "approval":
             approvals.append(Approval(id: ev["id"] as? String ?? "", tool: ev["tool"] as? String ?? "",
-                                      preview: ev["preview"] as? String ?? "", spoken: ev["spoken"] as? String ?? ""))
+                                      preview: ev["preview"] as? String ?? "", spoken: ev["spoken"] as? String ?? "",
+                                      allowLabel: ev["allowLabel"] as? String))
             onApproval?()
         case "approval_done":
             approvals.removeAll { $0.id == ev["id"] as? String }
@@ -466,6 +505,7 @@ final class Backend: ObservableObject {
                 add(.assistant, text)
             }
             lastAnswer = text
+            followUps = isProviderError ? [] : (ev["followUps"] as? [String] ?? [])
             onTurnFinished?(isProviderError ? "Sorry, the model failed. Try again." : text, turnHadText && !isProviderError)
             lastTool = ""
             turnStarted = nil
@@ -490,10 +530,12 @@ final class Backend: ObservableObject {
             }
             nowPlaying = np
         case "cleared":
+            followUps = []
             items = []
             approvals = []
             planProgress = nil
         case "reload":                                    // another chat was opened
+            followUps = []
             items = []
             approvals = []
             planProgress = nil

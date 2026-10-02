@@ -92,39 +92,37 @@ final class Hub: ObservableObject {
 struct ModuleBar: View {
     @ObservedObject var hub: Hub
     @Namespace private var ns
+    @State private var hovered: Module?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
                 ForEach(hub.enabled) { m in
-                    Button {
+                    ModuleTab(module: m, selected: hub.module == m, hovered: $hovered, ns: ns) {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { hub.module = m }
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: m.icon).font(.system(size: 11, weight: .semibold))
-                            if hub.module == m {
-                                Text(m.title).font(.system(size: 11, weight: .semibold)).lineLimit(1)
-                                    .transition(.opacity.combined(with: .move(edge: .leading)))
-                            }
-                        }
-                        .foregroundStyle(hub.module == m ? .white : Theme.secondary)
-                        .padding(.horizontal, 9).padding(.vertical, 5)
-                        .background {
-                            if hub.module == m {
-                                Capsule().fill(.white.opacity(0.12))
-                                    .overlay(Capsule().stroke(Theme.hairline))
-                                    .matchedGeometryEffect(id: "tab", in: ns)
-                            }
-                        }
-                        .contentShape(Capsule())
                     }
-                    .buttonStyle(.plain)
-                    .help(m.title)
                 }
             }
             .padding(.horizontal, 14)
         }
-        .frame(height: 32)
+        .frame(height: 34)
+        // Pointing at a tab says what it is, in its colour, at the end of the bar.
+        .overlay(alignment: .trailing) {
+            if let m = hovered, m != hub.module {
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(m.title).font(Typo.label(11).width(.expanded)).foregroundStyle(m.accent)
+                    Text(m.blurb).font(.system(size: 9.5, weight: .medium)).foregroundStyle(Theme.tertiary)
+                }
+                .lineLimit(1)
+                .padding(.leading, 14).padding(.trailing, 18)
+                .background(LinearGradient(colors: [.clear, .black.opacity(0.55), .black.opacity(0.55)],
+                                           startPoint: .leading, endPoint: .trailing))
+                .allowsHitTesting(false)
+                .transition(.opacity.combined(with: .offset(x: 6)))
+                .id(m)
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: hovered)
     }
 }
 
@@ -154,6 +152,13 @@ struct ModuleHost: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // A faint wash of the module's colour from the top: static, cross-fades with the module.
+        .background(alignment: .top) {
+            RadialGradient(colors: [hub.module.accent.opacity(0.13), .clear], center: .top, startRadius: 0, endRadius: 260)
+                .frame(height: 170)
+                .allowsHitTesting(false)
+        }
+        .environment(\.moduleAccent, hub.module.accent)
         .id(hub.module)
         // One short, explicit cross-fade — however the module changed (tab,
         // `notch -m`, a drop zone), so the old one can't linger underneath.
@@ -167,13 +172,19 @@ struct ModuleHeader<Trailing: View>: View {
     let title: String
     var subtitle: String? = nil
     @ViewBuilder var trailing: () -> Trailing
+    @Environment(\.moduleAccent) private var accent
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 15, weight: .semibold, design: .rounded))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    RoundedRectangle(cornerRadius: 1.5).fill(accent).frame(width: 3, height: 13)
+                        .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
+                    Text(title).font(Typo.title(16))
+                }
                 if let subtitle {
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(Theme.tertiary)
+                    Text(subtitle).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.tertiary)
+                        .padding(.leading, 10)
                 }
             }
             Spacer()
@@ -188,6 +199,8 @@ struct Chip: View {
     var icon: String? = nil
     var selected = false
     let action: () -> Void
+    @Environment(\.moduleAccent) private var accent
+    @State private var over = false
 
     var body: some View {
         Button(action: action) {
@@ -195,11 +208,14 @@ struct Chip: View {
                 if let icon { Image(systemName: icon).font(.system(size: 10, weight: .semibold)) }
                 Text(label).font(.system(size: 11, weight: .medium))
             }
-            .foregroundStyle(selected ? .white : Theme.secondary)
+            .foregroundStyle(selected ? .black.opacity(0.85) : (over ? .white : Theme.secondary))
             .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(Capsule().fill(selected ? AnyShapeStyle(Theme.userBubble) : AnyShapeStyle(Color.white.opacity(0.07))))
+            .background(Capsule().fill(selected ? AnyShapeStyle(accent) : AnyShapeStyle(Color.white.opacity(over ? 0.13 : 0.07))))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { over = $0 }
+        .animation(.easeOut(duration: 0.12), value: over)
     }
 }
 
@@ -208,27 +224,43 @@ struct PillButton: View {
     var icon: String? = nil
     var primary = false
     let action: () -> Void
+    @Environment(\.moduleAccent) private var accent
+    @State private var over = false
+    @State private var bumps = 0
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                if let icon { Image(systemName: icon).font(.system(size: 11, weight: .semibold)) }
+                if let icon {
+                    Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+                        .symbolEffect(.bounce, options: .speed(1.4), value: bumps)
+                }
                 Text(label).font(.system(size: 12, weight: .semibold))
             }
-            .foregroundStyle(.white.opacity(primary ? 1 : 0.85))
+            // Primary: a solid accent pill with dark text, like Apple's prominent buttons on dark glass.
+            .foregroundStyle(primary ? AnyShapeStyle(Color.black.opacity(0.85)) : AnyShapeStyle(Color.white.opacity(over ? 1 : 0.85)))
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(Capsule().fill(primary ? AnyShapeStyle(Theme.userBubble) : AnyShapeStyle(Color.white.opacity(0.1))))
+            .background(Capsule().fill(primary ? AnyShapeStyle(accent) : AnyShapeStyle(Color.white.opacity(over ? 0.16 : 0.1))))
+            .brightness(primary && over ? 0.06 : 0)
+            .scaleEffect(over ? 1.03 : 1)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { inside in
+            over = inside
+            if inside { bumps += 1 }
+        }
+        .animation(.spring(response: 0.22, dampingFraction: 0.7), value: over)
     }
 }
 
 struct EmptyHint: View {
     let icon: String
     let text: String
+    @Environment(\.moduleAccent) private var accent
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: icon).font(.system(size: 26, weight: .light)).foregroundStyle(Theme.tertiary)
+            Image(systemName: icon).font(.system(size: 26, weight: .light)).foregroundStyle(accent.opacity(0.7))
             Text(text).font(.system(size: 12)).foregroundStyle(Theme.tertiary).multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

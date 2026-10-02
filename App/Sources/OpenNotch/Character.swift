@@ -143,6 +143,14 @@ struct PuffPhysics {
     var hearts: [(age: Double, x: Double)] = []
 }
 
+/// Stubby arms and little feet (the perch in the closed notch). Angles in
+/// radians: 0 = arm hanging at the side, π/2 = straight out, π = up.
+/// Feet: how far each is lifted (0…1).
+struct PuffLimbs: Equatable {
+    var armL = 0.25, armR = 0.25
+    var footL = 0.0, footR = 0.0
+}
+
 struct PuffCanvas: View {
     let size: CGFloat
     let mood: AvatarMood
@@ -152,6 +160,8 @@ struct PuffCanvas: View {
     var phys = PuffPhysics()
     var speech: CGFloat? = nil
     var level: CGFloat = 0
+    /// Arms and feet, when Puff has a body (nil = the classic blob).
+    var limbs: PuffLimbs? = nil
 
     private static let ink = Color(red: 0.10, green: 0.07, blue: 0.16)
     private static let blush = Color(red: 1.0, green: 0.45, blue: 0.62)
@@ -217,6 +227,33 @@ struct PuffCanvas: View {
                         leaf.fill(Ellipse().path(in: rect.insetBy(dx: -lw * 0.2, dy: -lh * 0.4)),
                                   with: .color(palette.eye.opacity(0.25 * leafGlow)))
                     }
+                }
+            }
+
+            // ── Limbs, behind the body ──
+            if let limbs {
+                let limbColor = bottom.opacity(0.95)
+                let edge = Color.black.opacity(0.22)
+                // Feet: two soft ovals under the body; lifted ones rise and tip.
+                for (side, lift) in [(-1.0, limbs.footL), (1.0, limbs.footR)] {
+                    let fw = w * 0.26, fh = h * 0.2
+                    let fx = body.midX + CGFloat(side) * w * 0.2 - fw / 2
+                    let fy = body.maxY - fh * 0.55 - CGFloat(lift) * s * 0.09
+                    let foot = Ellipse().path(in: CGRect(x: fx, y: fy, width: fw, height: fh))
+                    g.fill(foot, with: .color(limbColor))
+                    g.stroke(foot, with: .color(edge), lineWidth: max(0.6, s * 0.012))
+                }
+                // Arms: little capsules from the shoulders.
+                for (side, angle) in [(-1.0, limbs.armL), (1.0, limbs.armR)] {
+                    let len = s * 0.24, thick = s * 0.1
+                    var a = g
+                    a.translateBy(x: body.midX + CGFloat(side) * w * 0.42, y: body.minY + h * 0.56)
+                    a.rotate(by: .radians(-side * angle))       // raise outward on both sides
+                    let r = CGRect(x: -thick / 2, y: 0, width: thick, height: len)
+                    let arm = Capsule().path(in: r)
+                    a.fill(arm, with: .linearGradient(Gradient(colors: [top, bottom]),
+                                                      startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: 0, y: len)))
+                    a.stroke(arm, with: .color(edge), lineWidth: max(0.6, s * 0.012))
                 }
             }
 

@@ -138,7 +138,9 @@ enum ProviderStore {
                                             extraHeaders: headers,
                                             usageInStream: [.openai, .openrouter, .groq].contains(k),
                                             supportsImages: ![.groq].contains(k),
-                                            requestReasoning: k == .openrouter)
+                                            requestReasoning: k == .openrouter,
+                                            maxTokens: k == .openrouter ? 16_000 : nil,
+                                            contextChars: k.isLocal ? 24_000 : 300_000)
         }
     }
 

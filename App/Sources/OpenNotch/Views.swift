@@ -201,6 +201,7 @@ struct RootView: View {
         .animation(Motion.open, value: backend.busy)
         .animation(Motion.open, value: backend.approvals.isEmpty)
         .animation(Motion.open, value: notch.hasLiveActivity)
+        .animation(Motion.open, value: notch.showsPerch)
         .animation(Motion.open, value: notch.earWidth)
         .frame(width: notch.windowSize.width, height: notch.windowSize.height, alignment: .top)
         .preferredColorScheme(.dark)
@@ -285,6 +286,7 @@ struct AppMenu: View {
 
     var body: some View {
         Button("Settings…") { SettingsWindow.shared.show() }
+        if Updater.available { Button("Check for Updates…") { Updater.shared.checkNow() } }
         Menu(KeepAwake.shared.isOn ? "☕ Keeping awake" : "Keep awake") {
             Button("For 30 minutes") { KeepAwake.shared.start(minutes: 30) }
             Button("For 1 hour") { KeepAwake.shared.start(minutes: 60) }
@@ -451,7 +453,8 @@ struct CollapsedView: View {
             let np = backend.nowPlaying
             return "Now playing \(np.track)" + (np.artist.isEmpty ? "" : " by \(np.artist)")
         case .agent:
-            return !backend.approvals.isEmpty ? "Ledge needs your approval" : backend.busy ? "Ledge is working" : "Hands-free on"
+            return !backend.approvals.isEmpty ? "Ledge needs your approval" : backend.busy ? "Ledge is working"
+                : handsFree.isOn ? "Hands-free on" : "Ledge's answer is ready"
         case .privacy:
             let p = notch.privacy
             return (p.micApps.isEmpty ? "" : "\(p.micApps.joined(separator: ", ")) is using the microphone. ")
@@ -486,6 +489,11 @@ struct CollapsedView: View {
             } else {
                 Text(backend.lastTool.isEmpty ? (backend.thinkingNow ? "Thinking…" : "Working") : backend.lastTool)
                     .foregroundStyle(.white.opacity(0.75))
+            }
+        } else if backend.unseenAnswer && !handsFree.isOn {
+            HStack(spacing: 3) {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(.green)
+                Text("Ready").foregroundStyle(.white.opacity(0.85))
             }
         } else if handsFree.isOn {
             if handsFree.phase == .standby || handsFree.phase == .starting {
@@ -952,7 +960,7 @@ struct Header: View {
         HStack(spacing: 8) {
             HStack(spacing: 8) {
                 AssistantFace(size: 26, backend: backend)
-                Text(assistantName).font(.system(size: 13, weight: .bold, design: .rounded))
+                Text(assistantName).font(Typo.brand(14))
                     .fixedSize()
                     .layoutPriority(2)
                 modelMenu
@@ -962,8 +970,8 @@ struct Header: View {
 
             Spacer().frame(width: notch.notchSize.width)
 
-            HStack(spacing: 14) {
-                HandsFreeSwitch(handsFree: handsFree)
+            HStack(spacing: 6) {
+                HandsFreeSwitch(handsFree: handsFree).padding(.trailing, 6)
                 iconButton("clock.arrow.circlepath", "Chat history (⌘Y)") {
                     withAnimation(.spring(duration: 0.25, bounce: 0.15)) { notch.showHistory.toggle() }
                 }
@@ -1010,11 +1018,7 @@ struct Header: View {
     }
 
     private func iconButton(_ icon: String, _ help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
-        }
-        .buttonStyle(.plain)
-        .help(help)
+        HoverIconButton(icon: icon, help: help, action: action)
     }
 }
 
@@ -1045,6 +1049,9 @@ struct Transcript: View {
                     if backend.busy, !(backend.items.last?.streaming ?? false) {
                         WorkingRow(backend: backend, started: backend.turnStarted, tool: backend.lastTool)
                     }
+                    if !backend.busy, !backend.followUps.isEmpty, backend.items.last?.kind == .assistant {
+                        FollowUpChips(items: backend.followUps) { backend.send($0) }
+                    }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, 18)
@@ -1055,6 +1062,36 @@ struct Transcript: View {
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+}
+
+/// "What next?" — the model's suggested follow-ups, one tap to send.
+struct FollowUpChips: View {
+    let items: [String]
+    let send: (String) -> Void
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) { chips }
+            VStack(alignment: .leading, spacing: 6) { chips }
+        }
+        .transition(.opacity)
+    }
+
+    @ViewBuilder private var chips: some View {
+        ForEach(items, id: \.self) { t in
+            Button { send(t) } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.turn.down.right").font(.system(size: 9, weight: .semibold))
+                    Text(t).font(.system(size: 11.5, weight: .medium)).lineLimit(1)
+                }
+                .foregroundStyle(Theme.secondary)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(.white.opacity(0.06)))
+                .overlay(Capsule().stroke(Theme.hairline))
+            }
+            .buttonStyle(.plain)
         }
     }
 }
@@ -1270,6 +1307,14 @@ struct ApprovalCard: View {
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(0.35)))
             HStack(spacing: 8) {
+                if let label = approval.allowLabel {
+                    Button { backend.answer(approval, allow: true, forChat: true) } label: {
+                        Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Approve this, and don't ask again for calls like it until you start or open another chat")
+                }
                 Spacer()
                 Button { backend.answer(approval, allow: false) } label: {
                     Text("Deny").font(.system(size: 12, weight: .semibold))
@@ -1445,9 +1490,23 @@ struct PeekabooView: View {
     var body: some View {
         ZStack(alignment: .top) {
             Color.clear
-            AssistantFace(size: 46, backend: backend, greets: true)
-                .offset(y: out ? notch.notchSize.height + 6 : -30)
-                .scaleEffect(out ? 1 : 0.6, anchor: .top)
+            HStack(alignment: .center, spacing: 8) {
+                AssistantFace(size: 46, backend: backend, greets: true)
+                    .scaleEffect(out ? 1 : 0.6, anchor: .top)
+                if let line = notch.peekLine {
+                    // A little speech bubble from Puff.
+                    Text(line)
+                        .font(Typo.brand(12.5))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 11).padding(.vertical, 6)
+                        .background(Capsule().fill(.white.opacity(0.12)))
+                        .overlay(Capsule().strokeBorder(Module.chat.accent.opacity(0.45), lineWidth: 0.75))
+                        .opacity(out ? 1 : 0)
+                        .offset(x: out ? 0 : -14)
+                }
+            }
+            .offset(y: out ? notch.notchSize.height + 6 : -30)
         }
         .onAppear { withAnimation(.spring(duration: 0.55, bounce: 0.45).delay(0.08)) { out = true } }
     }
