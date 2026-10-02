@@ -292,6 +292,16 @@ struct SettingsView: View {
             Text("Welcome to OpenNotch 👋").font(.system(size: 16, weight: .bold, design: .rounded))
             Text("Ledge lives in your notch. Grant these once and everything works — each row turns green as you go. You can come back any time from the notch menu › Settings.")
                 .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+            if ProviderStore.activeKind == nil || ProviderStore.activeKind == .apple {
+                HStack(spacing: 8) {
+                    Text(ProviderStore.activeKind == .apple ? "Using Apple's free on-device AI. Want a smarter one, still free?"
+                                                            : "Give Ledge a brain — free, no card:")
+                        .font(.system(size: 12, weight: .medium))
+                    Button("Sign in with OpenRouter") { SettingsWindow.shared.show(.ai) }
+                        .controlSize(.small)
+                }
+                .padding(.top, 2)
+            }
             Button("I'm all set") {
                 UserDefaults.standard.set(true, forKey: Prefs.onboardingDone)
                 model.welcome = false
@@ -427,6 +437,16 @@ private struct GeneralPane: View {
             }
             Toggle("Start hands-free at launch", isOn: $handsFreeAtLaunch).toggleStyle(.switch).controlSize(.small)
                 .font(.system(size: 12.5, weight: .medium))
+        }
+        Section(title: "Everyday help") {
+            PrefToggle("Dictate anywhere — hold ⌥⇧D", DictateAnywhere.pref,
+                       sub: "Talk and it's typed into any app; a quick tap starts long dictation. On: tidy the text with your AI first")
+            PrefToggle("Offer to take notes when a call starts", MeetingNotes.pref,
+                       sub: "Zoom, Teams, Meet, FaceTime… transcribed on your Mac; summary, decisions and action items after")
+            PrefToggle("End-of-day wrap-up", "proactive.recap",
+                       sub: "Around 6 pm: what you did, what's left, and the first thing tomorrow")
+            Text("Ledge stays quiet while you watch a video, present, are on a call or typing hard — and saves anything useful for your next break.")
+                .font(.system(size: 11)).foregroundStyle(Theme.secondary)
         }
         Section(title: "Appearance") {
             if #available(macOS 26.0, *) {
@@ -674,8 +694,14 @@ final class AIModel: ObservableObject {
             do {
                 let list = try await ProviderStore.test(k, key: key)
                 if let key, !key.isEmpty { Keychain.set(key, for: k.rawValue) }
-                let chosen = ProviderStore.model(for: k).flatMap { list.contains($0) ? $0 : nil }
+                var chosen = ProviderStore.model(for: k).flatMap { list.contains($0) ? $0 : nil }
                     ?? ProviderKind.pickDefault(k, from: list) ?? list.first ?? ""
+                // No credit on this OpenRouter account: start on the free models, not a paid router.
+                if k == .openrouter, let key, chosen == "openrouter/auto" || !chosen.hasSuffix(":free"),
+                   await ProviderStore.openRouterFreeTier(key: key) == true {
+                    chosen = list.contains(ProviderStore.openRouterFree) ? ProviderStore.openRouterFree
+                        : (list.first { $0.hasSuffix(":free") } ?? chosen)
+                }
                 ProviderStore.setModel(chosen, for: k)
                 ProviderStore.activeKind = k
                 active = k
@@ -826,8 +852,8 @@ private struct AIPane: View {
         }
 
         Section(title: "Sign in") {
-            row(icon: "arrow.triangle.branch", title: "Sign in with OpenRouter",
-                sub: "One login, hundreds of models — Claude, GPT, Gemini, and free ones. You set the spending limit.") {
+            row(icon: "arrow.triangle.branch", title: "Sign in with OpenRouter — free",
+                sub: "Two clicks, no card: free models straight away. Add credit any time for Claude, GPT or Gemini.") {
                 Button("Sign in…", action: m.signInOpenRouter).disabled(m.busy != nil)
             }
             row(icon: "person.crop.circle.badge.checkmark", title: "Sign in with ChatGPT",

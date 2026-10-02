@@ -81,9 +81,10 @@ struct NotConnectedProvider: ChatProvider {
 
     func turn(system: String, messages: [ChatMessage], tools: [ToolSpec]) -> AsyncThrowingStream<ProviderEvent, Error> {
         let reply = """
-        I'm not connected to an AI yet. Open **Settings › AI** to pick one — sign in with OpenRouter, \
-        paste an API key (OpenAI, Anthropic, Gemini, Groq), use a local model with Ollama or LM Studio, \
-        or Apple's on-device model. Everything stays on your Mac.
+        I'm not connected to an AI yet. The quickest way is free: open **Settings › AI** and click \
+        **Sign in with OpenRouter** — two clicks, no card, free models straight away. You can also paste an \
+        API key (OpenAI, Anthropic, Gemini, Groq), use a local model with Ollama or LM Studio, or Apple's \
+        on-device model. Everything else stays on your Mac.
         """
         return AsyncThrowingStream { c in
             let task = Task {

@@ -145,6 +145,7 @@ final class NotchController: ObservableObject {
     enum EarActivity { case hud, agent, timer, music, privacy, awake, none }
 
     private var perchHost: NSView?
+    let perchModel = PerchModel()
 
     /// Keep the perch's own view over the closed notch (geometry changes with the display).
     func layoutPerch() {
@@ -156,7 +157,7 @@ final class NotchController: ObservableObject {
 
     /// Puff sits beside the notch when nothing else needs the ears (pref `character.perch`).
     var showsPerch: Bool {
-        !hasLiveActivity && Prefs.on(Prefs.characterPerch)
+        !hasLiveActivity && Prefs.on(Prefs.characterPerch) && Attention.shared.state != .presenting
             && (UserDefaults.standard.string(forKey: "character.style") ?? "puff") == "puff"
     }
     var perchEarWidth: CGFloat { max(40, notchSize.height + 8) }
@@ -225,7 +226,7 @@ final class NotchController: ObservableObject {
         }
     }
 
-    func show(root: some View, perch: some View) {
+    func show(root: some View, perch: NSView) {
         let host = NSHostingView(rootView: root)
         // The panel has a fixed size: don't derive window min/max/intrinsic sizes from the content.
         host.sizingOptions = []
@@ -236,11 +237,8 @@ final class NotchController: ObservableObject {
         host.frame = container.bounds
         host.autoresizingMask = [.width, .height]
         container.addSubview(host)
-        let perchHost = PassThroughHostingView(rootView: AnyView(perch))
-        perchHost.sizingOptions = []
-        perchHost.wantsLayer = true
-        container.addSubview(perchHost)
-        self.perchHost = perchHost
+        container.addSubview(perch)
+        self.perchHost = perch
         layoutPerch()
         panel.contentView = container
         panel.orderFrontRegardless()
@@ -272,6 +270,7 @@ final class NotchController: ObservableObject {
     }
 
     private func tick() {
+        perchModel.sync(visible: mode == .collapsed && showsPerch, notchSize: notchSize, ear: perchEarWidth)
         let p = NSEvent.mouseLocation
         let over = visibleRect(margin: mode == .collapsed ? 4 : 12).contains(p)
         panel.ignoresMouseEvents = !over
@@ -357,8 +356,8 @@ final class NotchController: ObservableObject {
                           CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown))
         guard Prefs.on(Prefs.characterPeek), UserDefaults.standard.string(forKey: "character.style") ?? "puff" == "puff",
               idleFor < 60, !fileDrag,
-              !PresenceLogic.quietHours(Calendar.current.component(.hour, from: Date())), !privacy.active,
-              !Presence.frontmostIsFullScreen() else { return }
+              !PresenceLogic.quietHours(Calendar.current.component(.hour, from: Date())),
+              !Attention.shared.state.isBusy else { return }
         // Friendly and lively: say something that fits the moment.
         let c = Calendar.current.dateComponents([.hour, .minute, .weekday], from: Date())
         peekLine = Liveliness.current == .calm ? nil
@@ -516,16 +515,20 @@ final class HotKey {
     private var ref: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private let action: () -> Void
+    /// Called when the keys are let go (hold-to-talk). nil = press only.
+    private let release: (() -> Void)?
     private let id: UInt32
     let name: String
     private(set) var registered = false
 
     init(keyCode: UInt32 = UInt32(kVK_Space), modifiers: UInt32 = UInt32(optionKey), id: UInt32 = 1,
-         name: String = "", action: @escaping () -> Void) {
+         name: String = "", release: (() -> Void)? = nil, action: @escaping () -> Void) {
         self.action = action
+        self.release = release
         self.id = id
         self.name = name
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        var specs = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+                     EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
         let me = Unmanaged.passUnretained(self).toOpaque()
         InstallEventHandler(GetApplicationEventTarget(), { _, event, user in
             guard let user, let event else { return OSStatus(eventNotHandledErr) }
@@ -534,9 +537,9 @@ final class HotKey {
                               nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
             let me = Unmanaged<HotKey>.fromOpaque(user).takeUnretainedValue()
             guard hk.id == me.id else { return OSStatus(eventNotHandledErr) }
-            me.action()
+            if GetEventKind(event) == UInt32(kEventHotKeyReleased) { me.release?() } else { me.action() }
             return noErr
-        }, 1, &spec, me, &handler)
+        }, 2, &specs, me, &handler)
         let hid = EventHotKeyID(signature: OSType(0x4E544348), id: id)   // 'NTCH'
         registered = RegisterEventHotKey(keyCode, modifiers, hid, GetApplicationEventTarget(), 0, &ref) == noErr
     }

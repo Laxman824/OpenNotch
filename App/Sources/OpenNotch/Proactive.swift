@@ -6,7 +6,7 @@ import SwiftUI
 /// themselves** — the primary action runs only when you click it (the
 /// "propose, don't act" stance from plan_new_personal_agent.md).
 struct Proposal: Identifiable, Codable, Equatable {
-    enum Kind: String, Codable { case brief, meeting, inbox, memory }
+    enum Kind: String, Codable { case brief, meeting, inbox, memory, recap, week, notes }
     var id: String                     // stable per source item → natural de-duplication
     var kind: Kind
     var title: String
@@ -24,6 +24,9 @@ struct Proposal: Identifiable, Codable, Equatable {
         case .meeting: return "video.fill"
         case .inbox: return "envelope.badge.fill"
         case .memory: return "brain"
+        case .recap: return "moon.stars.fill"
+        case .week: return "chart.bar.fill"
+        case .notes: return "waveform.badge.mic"
         }
     }
 }
@@ -43,8 +46,15 @@ final class ProactiveEngine: ObservableObject {
     }
     @Published private(set) var briefRunning = false
 
+    @Published var recapOn = Defaults.bool("proactive.recap", true) { didSet { Defaults.set("proactive.recap", recapOn) } }
+    @Published var recapHour = UserDefaults.standard.object(forKey: "proactive.recapHour") as? Int ?? 18 {
+        didSet { UserDefaults.standard.set(recapHour, forKey: "proactive.recapHour") }
+    }
+    @Published private(set) var recapRunning = false
+
     weak var backend: Backend?
     weak var calendar: CalendarStore?
+    weak var screenTime: ScreenTimeTracker?
     /// Drop a proposal out of the notch.
     var present: ((Proposal) -> Void)?
     /// Open the chat so the result of an action is visible.
@@ -78,6 +88,8 @@ final class ProactiveEngine: ObservableObject {
         let quiet = hour >= 22 || hour < 7
         if meetingsOn && !quiet { checkMeetings(now) }
         if briefOn && !quiet { checkBrief(now, force: false) }
+        if Defaults.bool("proactive.recap", true) && !quiet { checkRecap(now, force: false) }   // Settings or menu
+        if !quiet { checkWeek(now) }
         if inboxOn && (9..<20).contains(hour) && now.timeIntervalSince(lastInboxCheck) > 30 * 60 {
             lastInboxCheck = now
             checkInbox()
@@ -126,6 +138,7 @@ final class ProactiveEngine: ObservableObject {
             self.briefRunning = false
             switch result {
             case .success(let text):
+                ValueLedger.shared.add(.briefs)
                 self.add(Proposal(id: id, kind: .brief, title: "Your morning brief is ready",
                                   detail: String(SpeechText.clean(text).prefix(140)),
                                   actionLabel: "Open", prompt: nil, url: nil, body: text,
@@ -158,6 +171,74 @@ final class ProactiveEngine: ObservableObject {
                      + "Keep the whole brief under 150 words: first the schedule, then what needs me, then one suggestion for the day. "
                      + "Don't send or draft anything.")
         return parts.joined(separator: "\n\n")
+    }
+
+    // MARK: end of day
+
+    /// Once a day after `recapHour`, when you're at the Mac: what you did, what's left, tomorrow.
+    private func checkRecap(_ now: Date, force: Bool) {
+        let id = "recap:\(TimerStore.dayKey(now))"
+        let hour = Calendar.current.component(.hour, from: now)
+        guard !recapRunning, backend?.busy == false, backend?.aiConnected == true else { return }
+        guard force || (!seen.contains(id) && hour >= recapHour && hour < recapHour + 4
+                        && Attention.shared.state == .available) else { return }
+        recapRunning = true
+        seen.insert(id); persistSeen()
+        backend?.oneshotWithTools(recapPrompt(now), tools: Self.briefTools) { [weak self] result in
+            guard let self else { return }
+            self.recapRunning = false
+            switch result {
+            case .success(let text):
+                ValueLedger.shared.add(.recaps)
+                self.add(Proposal(id: id, kind: .recap, title: "Your day, wrapped up 🌙",
+                                  detail: String(SpeechText.clean(text).prefix(140)),
+                                  actionLabel: "Open", prompt: nil, url: nil, body: text,
+                                  expires: Calendar.current.startOfDay(for: now).addingTimeInterval(30 * 3600)), present: true)
+            case .failure(let msg):
+                AppLog.write("recap failed: \(msg)")
+                self.lastBriefFailure = Date()
+            }
+        }
+    }
+
+    private func recapPrompt(_ now: Date) -> String {
+        var parts = ["Wrap up my day (\(DateFormatter.localizedString(from: now, dateStyle: .full, timeStyle: .none)))."]
+        if let st = screenTime, !st.today.isEmpty {
+            let top = st.today.sorted { $0.value > $1.value }.prefix(5)
+                .map { "- \(st.names[$0.key] ?? $0.key): \(Int($0.value / 60)) min" }.joined(separator: "\n")
+            parts.append("Where my time went today (apps):\n" + top)
+        }
+        let done = ValueLedger.shared.counts()
+        let lines = ValueLogic.highlights(done)
+        if !lines.isEmpty { parts.append("What you (Ledge) did for me this week so far: " + lines.joined(separator: "; ") + ".") }
+        parts.append("Check my reminders (reminders_list) for what's still open or overdue, and tomorrow's first events "
+                     + "(calendar_events). Then write, in under 120 words: 1) what I spent the day on, 2) what's left, "
+                     + "3) the first thing tomorrow, 4) one kind, practical suggestion. Warm, short, no headings. "
+                     + "Don't create or send anything.")
+        return parts.joined(separator: "\n\n")
+    }
+
+    func recapNow() {
+        proposals.removeAll { $0.kind == .recap }
+        checkRecap(Date(), force: true)
+    }
+
+    /// Friday afternoon (or later in the weekend): the shareable "my week with Ledge" card.
+    private func checkWeek(_ now: Date) {
+        let cal = Calendar.current
+        let weekday = cal.component(.weekday, from: now)              // 1 = Sunday … 6 = Friday, 7 = Saturday
+        let hour = cal.component(.hour, from: now)
+        guard (weekday == 6 && hour >= 16) || weekday == 7 || weekday == 1 else { return }
+        let week = ValueLogic.weekKey(now)
+        let id = "week:\(week)"
+        guard !seen.contains(id), Attention.shared.state == .available else { return }
+        let counts = ValueLedger.shared.counts(week: week)
+        let minutes = ValueLogic.minutes(counts)
+        guard minutes >= 10 else { return }
+        add(Proposal(id: id, kind: .week, title: "Your week with Ledge: \(ValueLogic.saved(minutes)) saved",
+                     detail: ValueLogic.highlights(counts).prefix(2).joined(separator: " · ").capitalizedFirst,
+                     actionLabel: "Share", prompt: nil, url: nil, body: week,
+                     expires: now.addingTimeInterval(3 * 24 * 3600)), present: true)
     }
 
     private func checkInbox() {
@@ -202,7 +283,7 @@ final class ProactiveEngine: ObservableObject {
 
     /// The only place a proposal causes anything to happen — on a click.
     func act(_ p: Proposal) {
-        if !(p.kind == .meeting && p.url != nil) && p.kind != .memory { openChat?() }
+        if !(p.kind == .meeting && p.url != nil) && p.kind != .memory && p.kind != .week { openChat?() }
         switch p.kind {
         case .brief:
             if let text = p.body { backend?.showLocalExchange(user: "Morning brief", reply: text) }
@@ -211,6 +292,15 @@ final class ProactiveEngine: ObservableObject {
             else if let prompt = p.prompt { backend?.send(prompt) }
         case .inbox:
             if let prompt = p.prompt { backend?.send(prompt) }
+        case .recap:
+            if let text = p.body { backend?.showLocalExchange(user: "Wrap up my day", reply: text) }
+        case .week:
+            if let path = ValueLedger.shared.share(week: p.body ?? ValueLogic.weekKey(Date())) {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                backend?.notice("Your week card is copied — paste it into a message or post. It's also saved in Finder.")
+            }
+        case .notes:
+            if let text = p.body { backend?.showLocalExchange(user: "Notes from my call", reply: text) }
         case .memory:
             for f in Self.facts(p) { MemoryStore.shared.remember(f.key, f.fact) }
             backend?.notice("Saved to memory — Settings › AI › Memory shows everything I remember.")
@@ -233,6 +323,13 @@ final class ProactiveEngine: ObservableObject {
     static func facts(_ p: Proposal) -> [(key: String, fact: String)] {
         guard let b = p.body, let arr = try? JSONSerialization.jsonObject(with: Data(b.utf8)) as? [[String: String]] else { return [] }
         return arr.compactMap { d in d["key"].flatMap { k in d["fact"].map { (k, $0) } } }
+    }
+
+    /// Call notes are ready (MeetingNotes).
+    func proposeNotes(app: String, body: String) {
+        add(Proposal(id: "notes:\(Int(Date().timeIntervalSince1970))", kind: .notes, title: "Notes from your \(app) call are ready",
+                     detail: String(SpeechText.clean(body).prefix(140)), actionLabel: "Open", prompt: nil, url: nil, body: body,
+                     expires: Date().addingTimeInterval(3 * 24 * 3600)), present: true)
     }
 
     /// What the morning brief may look at (read-only).

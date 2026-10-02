@@ -33,11 +33,12 @@ enum Liveliness: String, CaseIterable, Identifiable {
 }
 
 struct Nudge: Identifiable, Equatable {
-    enum Kind: String, CaseIterable { case clipLink, clipError, clipCode, clipLong, stretch, welcomeBack, morning }
+    enum Kind: String, CaseIterable { case clipLink, clipError, clipCode, clipLong, stretch, welcomeBack, morning, callNotes }
     enum Action: Equatable {
         case ask(String, clip: String?)       // send to Ledge, optionally with the clipboard attached
         case startBreak(minutes: Int)
         case openChat
+        case startNotes(String)                // the call app
     }
     var id = UUID()
     let kind: Kind
@@ -107,6 +108,7 @@ enum PresenceLogic {
     }
     /// Kinds that only lively/friendly levels offer (calm keeps to the essentials).
     static func allowed(_ k: Nudge.Kind, _ l: Liveliness) -> Bool {
+        if k == .callNotes { return true }      // you asked for this kind of help by joining a call; one offer
         switch l {
         case .lively: return true
         case .friendly: return k != .clipLong && k != .clipCode
@@ -114,6 +116,24 @@ enum PresenceLogic {
         }
     }
     static func quietHours(_ hour: Int) -> Bool { hour >= 22 || hour < 7 }
+
+    /// Learning from what you do with each kind: "a" accepted, "d" dismissed, "i" ignored
+    /// (closed on its own), newest last. Six in a row without an accept → that kind rests
+    /// (until you accept one from the queue or a week passes — see `Presence`).
+    static func wanted(_ outcomes: [Character]) -> Bool {
+        let recent = outcomes.suffix(6)
+        return !(recent.count == 6 && !recent.contains("a"))
+    }
+
+    /// How long a nudge is still worth showing after it was triggered (it may wait for a break).
+    static func shelfLife(_ k: Nudge.Kind) -> TimeInterval {
+        switch k {
+        case .clipLink, .clipError, .clipCode, .clipLong: return 10 * 60
+        case .welcomeBack, .morning: return 30 * 60
+        case .stretch, .callNotes: return 0           // busy = not the moment / only useful right now
+        default: return 20 * 60
+        }
+    }
 
     /// A line for a peek-a-boo, fitting the time of day. `seed` picks among options.
     static func peekLine(hour: Int, minute: Int, weekday: Int, seed: Int) -> String {
@@ -169,11 +189,43 @@ final class Presence: ObservableObject {
     private var dismissals: [Nudge.Kind: Int] = [:]
     private var dismissDay = ""
     private var lastClipNudge: [Nudge.Kind: Date] = [:]
+    /// Nudges that came while you were busy, offered at the next break.
+    private var waiting: [(nudge: Nudge, until: Date)] = []
+    private var showing: Nudge?
+    private static let outcomesKey = "presence.outcomes"
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        Attention.shared.onBreak = { [weak self] in self?.deliverWaiting() }
+    }
+
+    /// A natural break (the movie ended, the call hung up, you stopped typing): offer what waited.
+    func deliverWaiting() {
+        let now = Date()
+        waiting.removeAll { $0.until < now }
+        guard let next = waiting.popLast() else { return }    // the newest still-fresh one
+        if offer(next.nudge, fromQueue: true) { waiting.removeAll() }
+    }
+
+    // MARK: learning
+
+    private func outcomes(_ k: Nudge.Kind) -> [Character] {
+        let d = UserDefaults.standard.dictionary(forKey: Self.outcomesKey) as? [String: String] ?? [:]
+        return Array(d[k.rawValue] ?? "")
+    }
+
+    private func record(_ k: Nudge.Kind, _ c: Character) {
+        var d = UserDefaults.standard.dictionary(forKey: Self.outcomesKey) as? [String: String] ?? [:]
+        d[k.rawValue] = String((d[k.rawValue] ?? "").suffix(19) + String(c))
+        UserDefaults.standard.set(d, forKey: Self.outcomesKey)
+    }
+
+    /// A shown nudge that closed by itself counts as ignored.
+    private func resolveShowing(_ c: Character) {
+        if let n = showing { record(n.kind, c) }
+        showing = nil
     }
 
     private var idle: TimeInterval {
@@ -245,23 +297,40 @@ final class Presence: ObservableObject {
 
     /// Show it if manners allow. Returns whether it was shown.
     @discardableResult
-    func offer(_ n: Nudge) -> Bool {
+    func offer(_ n: Nudge, fromQueue: Bool = false) -> Bool {
         let level = Liveliness.current
         let now = Date()
         resetDismissalsIfNewDay()
         guard let notch, let backend,
               PresenceLogic.allowed(n.kind, level),
+              PresenceLogic.wanted(outcomes(n.kind)),
               !PresenceLogic.quietHours(Calendar.current.component(.hour, from: now)),
-              dismissals[n.kind, default: 0] < 3,
-              notch.mode == .collapsed || notch.mode == .hello,
+              dismissals[n.kind, default: 0] < 3 else { return false }
+        // Watching, presenting, on a call, typing hard, away: keep it for the next break.
+        // (The call-notes offer is the one thing that belongs *in* a call.)
+        let callOffer = n.kind == .callNotes && Attention.shared.state == .inCall
+        if Attention.shared.state.isBusy && !callOffer {
+            let life = PresenceLogic.shelfLife(n.kind)
+            if !fromQueue && life > 0 {
+                waiting.removeAll { $0.nudge.kind == n.kind }
+                waiting.append((n, now.addingTimeInterval(life)))
+                if waiting.count > 3 { waiting.removeFirst() }
+            }
+            return false
+        }
+        guard notch.mode == .collapsed || notch.mode == .hello,
               !backend.busy, backend.approvals.isEmpty, !(notch.handsFree?.isOn ?? false),
-              !notch.privacy.active,                                  // on a call: stay out of the way
-              !Self.frontmostIsFullScreen(),
-              now.timeIntervalSince(lastShown) >= PresenceLogic.gap(level) else { return false }
+              callOffer || now.timeIntervalSince(lastShown) >= PresenceLogic.gap(level) else { return false }
         shown = shown.filter { now.timeIntervalSince($0) < 3600 }
-        guard shown.count < PresenceLogic.maxPerHour(level) else { return false }
+        guard callOffer || shown.count < PresenceLogic.maxPerHour(level) else { return false }
         shown.append(now)
         lastShown = now
+        resolveShowing("i")
+        showing = n
+        let shownID = n.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            if self?.showing?.id == shownID { self?.resolveShowing("i") }     // closed on its own
+        }
         SoundFX.play(.peek)
         notch.showAlert(.nudge(n), for: n.kind == .welcomeBack || n.kind == .morning ? 12 : 9)
         return true
@@ -270,6 +339,14 @@ final class Presence: ObservableObject {
     func act(_ n: Nudge) {
         guard let notch, let backend, let hub else { return }
         dismissals[n.kind] = 0
+        if showing?.id == n.id { showing = nil }
+        record(n.kind, "a")
+        ValueLedger.shared.add(.nudgesTaken)
+        switch n.kind {
+        case .clipError, .clipCode: ValueLedger.shared.add(.explained)
+        case .clipLink, .clipLong: ValueLedger.shared.add(.summaries)
+        default: break
+        }
         switch n.action {
         case let .ask(prompt, clip):
             hub.module = .chat
@@ -282,12 +359,17 @@ final class Presence: ObservableObject {
         case .openChat:
             hub.module = .chat
             notch.expand(pinned: true)
+        case .startNotes(let app):
+            notch.collapse()
+            MeetingNotes.shared.start(app: app)
         }
     }
 
     func dismiss(_ n: Nudge) {
         resetDismissalsIfNewDay()
         dismissals[n.kind, default: 0] += 1
+        if showing?.id == n.id { showing = nil }
+        record(n.kind, "d")
         notch?.collapse()
     }
 

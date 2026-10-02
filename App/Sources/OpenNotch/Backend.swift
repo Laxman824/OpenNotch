@@ -416,6 +416,7 @@ final class Backend: ObservableObject {
     }
 
     private func handle(_ ev: [String: Any]) {
+        ValueLedger.shared.observe(ev)
         switch ev["type"] as? String ?? "" {
         case "status":
             applyStatus(ev)
@@ -518,7 +519,16 @@ final class Backend: ObservableObject {
         case "error":
             closeStreaming()
             lastErrorAt = Date()
-            add(.error, ev["text"] as? String ?? "error")
+            let text = ev["text"] as? String ?? "error"
+            // OpenRouter with no credit left: move to the free models instead of failing every time.
+            if text.contains("requires more credits"), ProviderStore.activeKind == .openrouter,
+               ProviderStore.model(for: .openrouter) != ProviderStore.openRouterFree {
+                ProviderStore.setModel(ProviderStore.openRouterFree, for: .openrouter)
+                core.reloadProvider()
+                add(.info, "Your OpenRouter balance ran out, so I switched to the free models (openrouter/free). Ask again — or add credit and pick a model in Settings › AI.")
+            } else {
+                add(.error, text)
+            }
         case "media":
             // Action results ("pause", "next") carry no track details — keep
             // what we know and let the refresh that follows fill it in.

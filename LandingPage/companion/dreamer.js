@@ -1185,7 +1185,9 @@ export function mount(host) {
   // neighbourhood. A full-screen WebGL layer cost ~40% CPU in WebKit's
   // compositor for a 105-pt figure; this is ~20x fewer pixels.
   const BOX = 360;
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "low-power" });
+  // On Retina (2x) the pixel density already smooths edges; MSAA on top roughly
+  // doubled the GPU process's work for no visible gain.
+  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: (window.devicePixelRatio || 1) < 2, powerPreference: "low-power" });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(BOX, BOX);
   renderer.setClearColor(0x000000, 0);
@@ -1196,6 +1198,10 @@ export function mount(host) {
   renderer.toneMappingExposure = 0.9;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // The shadow pass re-renders the scene; refresh it every other frame (see loop).
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
+  let frameNo = 0;
   const cv = renderer.domElement;
   cv.style.position = "absolute";
   cv.style.left = "0";
@@ -1501,10 +1507,14 @@ export function mount(host) {
     let fps = dragging || settling || s.mode === "fall" || s.wWave > 0.05 || s.wDangle > 0.05 ? 60
       : s.mode === "walk" || Math.abs(s.vx) > 2 || s.mode === "held" || s.talkV > 0.02 || s.talk > 0
         || s.wDance > 0.02 || s.wCeleb > 0.02 || s.wPoint > 0.02
-        || s.wAnnoy > 0.02 || s.wDizzy > 0.02 || s.wLove > 0.02 ? 30 : 15;
+        || s.wAnnoy > 0.02 || s.wDizzy > 0.02 || s.wLove > 0.02 ? 30
+      : s.wSleep > 0.9 ? 5            // dozing: breathing only
+      : 10;                           // standing still: idle sway reads fine at 10
     // Energy saver (on battery): one notch down, except while you're dragging him.
-    if (eco && !dragging) fps = fps >= 60 ? 30 : fps >= 30 ? 15 : 10;
+    if (eco && !dragging) fps = fps >= 60 ? 30 : fps >= 30 ? 15 : Math.min(fps, 8);
     frameCamera(s);
+    frameNo += 1;
+    if (frameNo % 2 === 0 || fps >= 60) renderer.shadowMap.needsUpdate = true;
     renderer.render(sim.scene, camera);
     placeBubble(s);
     reportIn -= dt;

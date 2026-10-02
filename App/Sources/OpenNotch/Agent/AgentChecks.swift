@@ -177,6 +177,43 @@ enum AgentChecks {
         check("liveliness: calm only welcomes back", !PresenceLogic.allowed(.clipError, .calm) && PresenceLogic.allowed(.welcomeBack, .calm))
         check("quiet hours", PresenceLogic.quietHours(23) && PresenceLogic.quietHours(6) && !PresenceLogic.quietHours(9))
         check("peek line: lunch", ["Lunch soon? 🍜", "Food break? 🥪"].contains(PresenceLogic.peekLine(hour: 12, minute: 40, weekday: 3, seed: 1)))
+        // Attention: what counts as busy
+        check("attention: video is watching", AttentionLogic.isMedia(process: "Google Chrome", assertion: "Video Wake Lock"))
+        for p in ["caffeinate", "Amphetamine", "KeepingYouAwake", "OpenNotch", "backupd"] {
+            check("attention: \(p) is not watching", !AttentionLogic.isMedia(process: p, assertion: "Prevent sleep"))
+        }
+        let S = AttentionLogic.state
+        check("attention: call wins", S(true, true, true, 1, 0) == .inCall)
+        check("attention: full screen", S(false, true, false, 0, 0) == .presenting)
+        check("attention: watching", S(true, false, false, 0, 0) == .watching)
+        check("attention: typing hard", S(false, false, false, 0.8, 0) == .deepWork)
+        check("attention: light typing is fine", S(false, false, false, 0.3, 0) == .available)
+        check("attention: away", S(false, false, false, 0, 600) == .away)
+        check("attention: movie while idle is still watching", S(true, false, false, 0, 600) == .watching)
+        // Learning from accept / dismiss / ignore
+        check("learning: new kind is wanted", PresenceLogic.wanted([]))
+        check("learning: six misses rest it", !PresenceLogic.wanted(Array("ddiidi")))
+        check("learning: one accept keeps it", PresenceLogic.wanted(Array("ddiaid")))
+        check("learning: old accept doesn't save it", !PresenceLogic.wanted(Array("addiidi")))
+        check("queue: copied things expire fast", PresenceLogic.shelfLife(.clipError) == 600 && PresenceLogic.shelfLife(.stretch) == 0)
+        // Dictation polish must stay the same text (never an answer to it)
+        let said = "um so I think we should uh move the launch to Monday and tell the testers"
+        check("dictate: polish accepted", DictateLogic.acceptPolish(original: said, polished: "I think we should move the launch to Monday and tell the testers."))
+        check("dictate: an answer is rejected", !DictateLogic.acceptPolish(original: said, polished: "Sure! Here's an email you could send to your testers about the new launch date: Dear testers, …"))
+        check("dictate: empty polish rejected", !DictateLogic.acceptPolish(original: said, polished: "  "))
+        check("dictate: words", DictateLogic.wordCount("one two  three\nfour") == 4)
+        // Value ledger maths
+        check("value: minutes", abs(ValueLogic.minutes([.drafts: 2, .dictatedWords: 300]) - (8 + 5.4)) < 0.01)
+        check("value: wording", ValueLogic.saved(45) == "≈ 45 min" && ValueLogic.saved(130) == "≈ 2.2 h")
+        check("value: biggest first", ValueLogic.highlights([.answers: 1, .meetingNotes: 2]).first?.hasPrefix("took notes") == true)
+        check("value: no zero lines", ValueLogic.highlights([.drafts: 0]).isEmpty)
+        check("value: week key", ValueLogic.weekKey(Date(timeIntervalSince1970: 1_790_000_000)).hasPrefix("2026-W"))
+        // Meeting apps
+        check("notes: zoom is a call", MeetingLogic.callApp(["zoom.us"]) == "zoom.us")
+        check("notes: meet in chrome", MeetingLogic.callApp(["Google Chrome"]) == "Google Chrome")
+        check("notes: dictation isn't a call", MeetingLogic.callApp(["Voice Memos", "OpenNotch"]) == nil)
+        check("notes: clip keeps both ends", MeetingLogic.clip(String(repeating: "a", count: 100) + String(repeating: "z", count: 100), max: 60).hasPrefix("aaaa")
+              && MeetingLogic.clip(String(repeating: "a", count: 100) + String(repeating: "z", count: 100), max: 60).hasSuffix("zzzz"))
         let wb = PresenceLogic.welcomeBack(away: 40 * 60, nextEvent: ("Design review", Date()), remindersDue: 2, answerReady: true)
         check("welcome back: summary", wb.detail.hasPrefix("Your answer is ready") && wb.detail.contains("2 reminders") && wb.action == .openChat)
     }

@@ -12,7 +12,7 @@ import SwiftUI
 //   PuffCanvas     — pure drawing from (mood, expression, physics snapshot, t).
 
 /// Short-lived expressions from interaction; they outrank the agent mood.
-enum PuffExpression: Equatable {
+enum PuffExpression: Hashable {
     case annoyed, dizzy, love, surprised, celebrate
 }
 
@@ -162,6 +162,8 @@ struct PuffCanvas: View {
     var level: CGFloat = 0
     /// Arms and feet, when Puff has a body (nil = the classic blob).
     var limbs: PuffLimbs? = nil
+    /// Force eyes shut/open (pre-rendered perch frames); nil = blink on its own clock.
+    var blink: Bool? = nil
 
     private static let ink = Color(red: 0.10, green: 0.07, blue: 0.16)
     private static let blush = Color(red: 1.0, green: 0.45, blue: 0.62)
@@ -285,7 +287,7 @@ struct PuffCanvas: View {
 
             // Blink every ~3.8 s (sometimes double). Deterministic in t.
             let period = 3.8, cycle = floor(t / period), phase = t - cycle * period
-            let blinking = phase > period - 0.12 || (Int(cycle) % 4 == 1 && phase > period - 0.38 && phase < period - 0.27)
+            let blinking = blink ?? (phase > period - 0.12 || (Int(cycle) % 4 == 1 && phase > period - 0.38 && phase < period - 0.27))
 
             for side in [-1.0, 1.0] {
                 let sideF = CGFloat(side)

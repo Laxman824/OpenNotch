@@ -1,4 +1,5 @@
 import AppKit
+import Speech
 import Carbon.HIToolbox
 import Combine
 import SwiftUI
@@ -7,6 +8,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let backend = Backend()
     let dictation = Dictation()
+    let dictate = DictateAnywhere()
     let handsFree = HandsFree()
     let hub = Hub()
     let desktop = DesktopCompanion()
@@ -86,7 +88,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                     : .info(icon: "mic.slash", text: "Hands-free off"), for: 2.2)
         }.store(in: &subs)
         handsFree.$speechLevel.sink { [weak self] l in self?.backend.speechLevel = l }.store(in: &subs)
-        dictation.onFinish = { [weak self] text in self?.backend.send(text) }
+        dictate.dictation = dictation
+        dictate.backend = backend
+        dictate.notch = notch
+        dictate.hub = hub
+        dictation.onFinish = { [weak self] text in
+            guard let self else { return }
+            if self.dictate.active { self.dictate.finished(text) } else { self.backend.send(text) }
+        }
+        dictation.onEmpty = { [weak self] in
+            if self?.dictate.active == true { self?.dictate.cancelled(); self?.notch.collapse() }
+        }
         // One owner of the mic at a time.
         dictation.canStart = { [weak self] in
             guard let self, self.handsFree.isOn else { return true }
@@ -99,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         handsFree.willStart = { [weak self] in
             if self?.dictation.listening == true { self?.dictation.stop() }
         }
-        dictation.onError = { [weak self] msg in self?.backend.notice(msg) }
+        dictation.onError = { [weak self] msg in self?.dictate.cancelled(); self?.backend.notice(msg) }
 
         hub.timers.onAlert = { [weak self] alert in
             Chime.attention()
@@ -118,12 +130,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notch.show(root: RootView(backend: backend, notch: notch, dictation: dictation, hub: hub, handsFree: handsFree)
             .environmentObject(hub)
             .environmentObject(handsFree),
-                   perch: PerchLayer(backend: backend, notch: notch, hub: hub))
+                   perch: PerchHostView(model: notch.perchModel, backend: backend, hub: hub))
 
         let keys = [
             HotKey(id: 1, name: "⌥Space") { [weak self] in Task { @MainActor in self?.notch.toggleFromHotkey() } },
             HotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey | shiftKey), id: 4, name: "⌥⇧Space") { [weak self] in
                 Task { @MainActor in self?.handsFree.toggle() }
+            },
+            // Dictate into any app: hold to talk, or tap to start / tap to finish.
+            HotKey(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(optionKey | shiftKey), id: 5, name: "⌥⇧D",
+                   release: { [weak self] in Task { @MainActor in self?.dictate.keyUp() } }) { [weak self] in
+                Task { @MainActor in self?.dictate.keyDown() }
             },
         ]
         hotKeys = keys
@@ -209,12 +226,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.notch.showHUD(.awake(on: on, label: HealthLogic.awakeLabel(until: KeepAwake.shared.until)
                 .replacingOccurrences(of: "∞", with: "Until you stop it")), for: 1.8)
         }
+        if ProviderStore.adoptFreeDefault() {                 // free + private out of the box, where possible
+            backend.core.reloadProvider()
+            AppLog.write("no AI set up: using Apple's on-device model")
+        }
         backend.start()
         Updater.shared.start()
         Presence.shared.notch = notch
         Presence.shared.backend = backend
         Presence.shared.hub = hub
         hub.clipboard.onCopied = { text in Presence.shared.copied(text) }
+        Attention.shared.inCall = { [weak self] in self?.notch.privacy.active ?? false }
+        Attention.shared.onCallStart = { [weak self] in
+            MeetingNotes.shared.callStarted(micApps: self?.notch.privacy.micApps ?? [])
+        }
+        MeetingNotes.shared.notch = notch
+        MeetingNotes.shared.backend = backend
+        MeetingNotes.shared.proactive = hub.proactive
+        Attention.shared.start()
         Presence.shared.start()
         ToolHost.hub = hub
         ToolHost.notch = notch
@@ -253,6 +282,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if name == "player" { self.notch.openPlayer(hold: 5); return }     // the hover music player
                 if name == "mirror" { self.notch.openMirror(hold: 6); return }     // camera mirror
                 if name == "peek" { self.notch.peekaboo(); return }                // Puff says hi
+                if name == "notestest" {                                          // dev: 20 s of call notes, no call needed
+                    MeetingNotes.shared.start(app: "Test call")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 20) { MeetingNotes.shared.stop() }
+                    return
+                }
                 if name == "busytest" {                                           // dev: the "AI working" look, no AI call
                     self.backend.busy = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.backend.busy = false }
@@ -346,6 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pro = hub.proactive
         pro.backend = backend
         pro.calendar = hub.calendar
+        pro.screenTime = hub.screenTime
         pro.present = { [weak self] p in
             guard let self else { return }
             Chime.attention()
@@ -428,6 +463,34 @@ struct OpenNotchMain {
         }
         if CommandLine.arguments.contains("--probe-privacy") {          // dev: who's using mic / camera now
             print("mic:", PrivacyMonitor.micApps(), "camera:", PrivacyMonitor.cameraOn())
+            exit(0)
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-week") {      // dev: the shareable card, sample numbers
+            let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "week.png"
+            MainActor.assumeIsolated {
+                let r = ImageRenderer(content: WeekCard(counts: [.drafts: 9, .explained: 6, .answers: 41, .dictatedWords: 2300,
+                                                                  .summaries: 7, .briefs: 4, .meetingNotes: 2]))
+                r.scale = 2
+                if let img = r.nsImage, let t = img.tiffRepresentation, let rep = NSBitmapImageRep(data: t),
+                   let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: out)) }
+            }
+            exit(0)
+        }
+        if CommandLine.arguments.contains("--probe-notes") {             // dev: transcribe 12 s of the Mac's sound
+            guard CGPreflightScreenCaptureAccess() else { print("screen recording not allowed for this process — skipped"); exit(2) }
+            let rec = MeetingRecorder()
+            rec.start(withMic: false, onLine: { who, text in print("\(who): \(text)") }, done: { err in
+                if let err { print("start failed:", err); exit(1) }
+                print("recording 12 s…")
+            })
+            print("speech auth:", SFSpeechRecognizer.authorizationStatus().rawValue, "(3 = authorized)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { rec.stop { DispatchQueue.main.asyncAfter(deadline: .now() + 4) { print("done"); exit(0) } } }
+            RunLoop.main.run()
+        }
+        if CommandLine.arguments.contains("--probe-attention") {        // dev: is something being watched / full screen?
+            MainActor.assumeIsolated {
+                print("watching:", Attention.mediaApp() ?? "nothing", "· full screen in front:", Presence.frontmostIsFullScreen())
+            }
             exit(0)
         }
         if CommandLine.arguments.contains("--checks") {

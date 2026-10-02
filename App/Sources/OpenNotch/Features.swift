@@ -14,6 +14,8 @@ final class Dictation: ObservableObject {
     @Published private(set) var transcript = ""
 
     var onFinish: ((String) -> Void)?
+    /// Ended with nothing heard.
+    var onEmpty: (() -> Void)?
     var onError: ((String) -> Void)?
     /// Return false to refuse (e.g. hands-free already owns the mic).
     var canStart: (() -> Bool)?
@@ -78,7 +80,7 @@ final class Dictation: ObservableObject {
         level = 0
         io.cancel()
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { onFinish?(text) }
+        if !text.isEmpty { onFinish?(text) } else { onEmpty?() }
         transcript = ""
     }
 }

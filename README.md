@@ -43,6 +43,15 @@ Lisbon"), which is saved only when you click Save (see and delete them in Settin
 **summarising** what scrolled out of its context, runs independent lookups **in parallel**, and ends
 answers with **one-tap follow-ups**. Ask it something and close the notch: the ears say **Ready** when it's done.
 
+**Everyday superpowers:** hold **⌥⇧D** and talk — your words are typed (and tidied) into any app. When a Zoom,
+Teams, Meet or FaceTime call starts, Ledge offers to **take notes** — transcribed on your Mac, then a summary with
+decisions and action items, no bot joining the call. Around 6 pm it **wraps up your day**, and on Fridays it shows
+**your week with Ledge** (time saved) as a card you can share. It **stays quiet while you watch a video**, present,
+are on a call or deep in typing, and saves anything useful for your next break.
+
+**Free to start:** Apple's on-device AI works out of the box where available, and **Sign in with OpenRouter** gives
+free models in two clicks — no card.
+
 ## Nothing risky without your OK
 
 | | |

@@ -286,6 +286,9 @@ struct AppMenu: View {
 
     var body: some View {
         Button("Settings…") { SettingsWindow.shared.show() }
+        if let app = MeetingNotes.shared.recordingApp {
+            Button("Stop taking notes (\(app))") { MeetingNotes.shared.stop() }
+        }
         if Updater.available { Button("Check for Updates…") { Updater.shared.checkNow() } }
         Menu(KeepAwake.shared.isOn ? "☕ Keeping awake" : "Keep awake") {
             Button("For 30 minutes") { KeepAwake.shared.start(minutes: 30) }
@@ -323,6 +326,14 @@ struct AppMenu: View {
             Button((hub.proactive.meetingsOn ? "✓ " : "   ") + "Meeting heads-up (10 min before)") { hub.proactive.meetingsOn.toggle() }
             Divider()
             Button("Brief me now") { hub.proactive.briefNow() }
+            Button((hub.proactive.recapOn ? "✓ " : "   ") + "End-of-day wrap-up (\(hub.proactive.recapHour):00)") { hub.proactive.recapOn.toggle() }
+            Button("Wrap up my day now") { hub.proactive.recapNow() }
+            Button("Share my week with Ledge") {
+                if let path = ValueLedger.shared.share() {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                    backend.notice("Your week card is copied — paste it into a message or post.")
+                }
+            }
             Button(hub.proactive.paused ? "Resume suggestions" : "Pause all suggestions") { hub.proactive.paused.toggle() }
         }
         Button("AI & models…") { SettingsWindow.shared.show(.ai) }
@@ -815,6 +826,15 @@ struct ExpandedView: View {
             .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.07)))
             .overlay(RoundedRectangle(cornerRadius: 16)
                 .stroke(inputFocused ? Color.white.opacity(0.22) : Theme.hairline, lineWidth: 1))
+            // Little Puff walking on the bar's top edge, in the empty space at the right
+            // (the suggestion chips sit on the left). Cached frames on a CALayer — cheap.
+            .overlay(alignment: .topTrailing) {
+                ComposerWalker(backend: backend, active: isOpen && hub.module == .chat && !handsFree.isOn)
+                    .frame(width: 220, height: 30)
+                    .padding(.trailing, 16)
+                    .offset(y: -30)
+                    .allowsHitTesting(false)
+            }
         }
         .padding(.horizontal, 14).padding(.bottom, 14).padding(.top, 6)
     }

@@ -7,7 +7,7 @@ import SwiftUI
 /// latency, and — the part a video avatar can't do — its expression is driven
 /// by what the *agent* is actually doing: listening, thinking, running a tool,
 /// talking, waiting on approval, done, failed, offline.
-enum AvatarMood: Equatable {
+enum AvatarMood: Hashable {
     case idle, listening, thinking, working, talking, alert, happy, sad, sleeping
 }
 

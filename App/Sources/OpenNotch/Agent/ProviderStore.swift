@@ -144,6 +144,31 @@ enum ProviderStore {
         }
     }
 
+    /// OpenRouter's router across whatever free models are up (price 0, supports tools).
+    static let openRouterFree = "openrouter/free"
+
+    /// Does this OpenRouter key have no paid credit? (Then paid models fail with
+    /// "requires more credits" — use the free router instead.) nil = couldn't tell.
+    static func openRouterFreeTier(key: String) async -> Bool? {
+        var req = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/key")!)
+        req.timeoutInterval = 10
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        guard let (data, resp) = try? await HTTP.session.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
+              let d = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [String: Any] else { return nil }
+        if let free = d["is_free_tier"] as? Bool, free { return true }
+        if let left = d["limit_remaining"] as? Double, left <= 0 { return true }
+        return false
+    }
+
+    /// Free and private by default: Apple's on-device model when nothing is set up yet.
+    /// Returns true if it picked one.
+    @discardableResult
+    static func adoptFreeDefault() -> Bool {
+        guard activeKind == nil, AppleOnDeviceProvider.availability == nil else { return false }
+        activeKind = .apple
+        return true
+    }
+
     /// Checks a key/endpoint by listing models. Returns the models on success.
     static func test(_ k: ProviderKind, key: String?) async throws -> [String] {
         switch k {
