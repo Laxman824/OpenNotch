@@ -13,3 +13,6 @@ App/.build/
 .env.*
 # Local promo material (never pushed)
 PROMOTION/
+# Maintainer notes (kept local, not published)
+CLAUDE.md
+docs/HANDOVER.md
