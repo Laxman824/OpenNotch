@@ -13,6 +13,11 @@ import SwiftUI
 // MARK: - Preferences
 
 enum Prefs {
+    /// What the assistant is called everywhere (Settings › General; also the wake word).
+    static var name: String {
+        let n = UserDefaults.standard.string(forKey: "assistantName")?.trimmingCharacters(in: .whitespaces) ?? ""
+        return n.isEmpty ? "Ledge" : n
+    }
     static let hudVolume = "hud.volume", hudDevice = "hud.device", hudPower = "hud.power"
     static let playerHover = "player.hover"
     static let hudHealth = "hud.health"
@@ -76,7 +81,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "General"
         case .ai: return "AI"
         case .notch: return "Notch"
-        case .desktop: return "Desktop Ledge"
+        case .desktop: return "Desktop"
         case .voice: return "Voice"
         case .permissions: return "Permissions"
         case .shortcuts: return "Shortcuts"
@@ -120,6 +125,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
+
+    func close() { window?.close() }
 
     func windowWillClose(_ notification: Notification) {
         model.stopPolling()
@@ -290,12 +297,12 @@ struct SettingsView: View {
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Welcome to OpenNotch 👋").font(.system(size: 16, weight: .bold, design: .rounded))
-            Text("Ledge lives in your notch. Grant these once and everything works — each row turns green as you go. You can come back any time from the notch menu › Settings.")
+            Text("\(Prefs.name) lives in your notch. Grant these once and everything works — each row turns green as you go. You can come back any time from the notch menu › Settings.")
                 .font(.system(size: 12)).foregroundStyle(Theme.secondary)
             if ProviderStore.activeKind == nil || ProviderStore.activeKind == .apple {
                 HStack(spacing: 8) {
                     Text(ProviderStore.activeKind == .apple ? "Using Apple's free on-device AI. Want a smarter one, still free?"
-                                                            : "Give Ledge a brain — free, no card:")
+                                                            : "Give \(Prefs.name) a brain — free, no card:")
                         .font(.system(size: 12, weight: .medium))
                     Button("Sign in with OpenRouter") { SettingsWindow.shared.show(.ai) }
                         .controlSize(.small)
@@ -403,7 +410,7 @@ private struct GeneralPane: View {
                     }
             }
             HStack {
-                Text("Notch character").font(.system(size: 12.5, weight: .medium))
+                Text("Look in the notch").font(.system(size: 12.5, weight: .medium))
                 Spacer()
                 Picker("", selection: $characterStyle) {
                     Text("Puff (soft blob)").tag("puff")
@@ -412,8 +419,8 @@ private struct GeneralPane: View {
                 .labelsHidden().frame(width: 180)
             }
             PrefToggle("Character sounds", Prefs.characterSounds, sub: "Tiny boops when you poke, pet or celebrate")
-            PrefToggle("Peek out of the notch", Prefs.characterPeek, sub: "Now and then Puff pops out to say hi while you work")
-            PrefToggle("Puff lives beside the notch", Prefs.characterPerch,
+            PrefToggle("Peek out of the notch", Prefs.characterPeek, sub: "Now and then \(Prefs.name) pops out to say hi while you work")
+            PrefToggle("\(Prefs.name) sits beside the notch", Prefs.characterPerch,
                        sub: "Sits next to the closed notch with arms and feet — waves, stretches, dances to music, naps")
             HStack {
                 Text("Notch face colours").font(.system(size: 12.5, weight: .medium))
@@ -445,7 +452,7 @@ private struct GeneralPane: View {
                        sub: "Zoom, Teams, Meet, FaceTime… transcribed on your Mac; summary, decisions and action items after")
             PrefToggle("End-of-day wrap-up", "proactive.recap",
                        sub: "Around 6 pm: what you did, what's left, and the first thing tomorrow")
-            Text("Ledge stays quiet while you watch a video, present, are on a call or typing hard — and saves anything useful for your next break.")
+            Text("\(Prefs.name) stays quiet while you watch a video, present, are on a call or typing hard — and saves anything useful for your next break.")
                 .font(.system(size: 11)).foregroundStyle(Theme.secondary)
         }
         Section(title: "Appearance") {
@@ -487,8 +494,12 @@ private struct NotchPane: View {
             PrefToggle("Health alerts", Prefs.hudHealth, sub: "Sustained CPU load, memory pressure, heat, low disk — at most every 30 min each")
         }
         Section(title: "Setup") {
-            Button("Show the welcome checklist again") {
-                SettingsWindow.shared.show(.permissions, welcome: true)
+            HStack {
+                Button("Show the welcome again") {
+                    SettingsWindow.shared.close()
+                    (NSApp.delegate as? AppDelegate)?.notch.startOnboarding()
+                }
+                Button("Permissions checklist") { SettingsWindow.shared.show(.permissions, welcome: true) }
             }
         }
     }
@@ -498,14 +509,14 @@ private struct DesktopPane: View {
     @State private var enabled = DesktopCompanion.enabled
     @State private var avatar = DesktopCompanion.avatar
     private let looks: [(id: String, name: String, icon: String, tint: Color)] = [
-        ("ledge", "Ledge", "figure.wave", Color(red: 0.72, green: 0.64, blue: 1.0)),
+        ("ledge", "Classic", "figure.wave", Color(red: 0.72, green: 0.64, blue: 1.0)),
         ("bee", "Bee", "ladybug.fill", Color(red: 1.0, green: 0.62, blue: 0.2)),
         ("cat", "Cat", "cat.fill", Color(red: 0.55, green: 0.95, blue: 0.5)),
     ]
 
     var body: some View {
         Section(title: "Companion") {
-            Toggle("Show Desktop Ledge", isOn: $enabled).toggleStyle(.switch).controlSize(.small)
+            Toggle("Show \(Prefs.name) on the desktop", isOn: $enabled).toggleStyle(.switch).controlSize(.small)
                 .font(.system(size: 12.5, weight: .medium))
                 .onChange(of: enabled) { _, v in (NSApp.delegate as? AppDelegate)?.desktop.setEnabled(v) }
             HStack(spacing: 12) {
@@ -533,8 +544,8 @@ private struct DesktopPane: View {
         }
         Section(title: "Personality") {
             PrefToggle("Dance to music", Prefs.desktopDance, sub: "When Spotify or Music is playing")
-            PrefToggle("React to Ledge", Prefs.desktopReactions,
-                       sub: "Points at the notch when Ledge needs your OK, celebrates when a task is done")
+            PrefToggle("React to what I'm doing", Prefs.desktopReactions,
+                       sub: "Points at the notch when \(Prefs.name) needs your OK, celebrates when a task is done")
             PrefToggle("Doze off late at night", Prefs.desktopSleep, sub: "11 pm – 6 am when nothing's going on; hover to wake him")
         }
     }
@@ -562,7 +573,7 @@ private struct VoicePane: View {
             }
         }
         Section(title: "Hands-free") {
-            Text("⌥⇧Space starts and stops it. Say “Ledge” to wake it from standby, “stop listening” to end.")
+            Text("⌥⇧Space starts and stops it. Say “\(Prefs.name)” to wake it from standby, “stop listening” to end.")
                 .font(.system(size: 12)).foregroundStyle(Theme.secondary)
         }
     }
@@ -803,7 +814,7 @@ private struct MemorySection: View {
                 .font(.system(size: 12))
                 .onChange(of: learn) { _, v in UserDefaults.standard.set(v, forKey: MemoryLearner.pref) }
             if facts.isEmpty {
-                Text("Nothing saved yet. Tell Ledge something about you, or say “remember that…”.")
+                Text("Nothing saved yet. Tell \(Prefs.name) something about you, or say “remember that…”.")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
             }
             ForEach(facts.prefix(60), id: \.key) { f in
@@ -958,7 +969,7 @@ private struct CompanionPicker: View {
     @State private var avatar = DesktopCompanion.avatar
     @AppStorage("character.style") private var notchStyle = "puff"
     private let looks: [(id: String, name: String, icon: String, tint: Color, line: String)] = [
-        ("ledge", "Ledge", "figure.wave", Color(red: 0.72, green: 0.64, blue: 1.0), "Hoodie, big grin"),
+        ("ledge", "Classic", "figure.wave", Color(red: 0.72, green: 0.64, blue: 1.0), "Hoodie, big grin"),
         ("bee", "Bee", "ladybug.fill", Color(red: 1.0, green: 0.62, blue: 0.2), "Wings and antennae"),
         ("cat", "Cat", "cat.fill", Color(red: 0.55, green: 0.95, blue: 0.5), "Hood up, cat-eye glasses"),
     ]

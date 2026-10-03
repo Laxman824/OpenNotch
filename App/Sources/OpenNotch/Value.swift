@@ -122,7 +122,7 @@ final class ValueLedger {
         r.scale = 2
         guard let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]) else { return nil }
-        let url = URL(fileURLWithPath: opennotchDir("share")).appendingPathComponent("My week with Ledge \(week).png")
+        let url = URL(fileURLWithPath: opennotchDir("share")).appendingPathComponent("My week with \(Prefs.name) \(week).png")
         try? png.write(to: url)
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -143,7 +143,7 @@ struct WeekCard: View {
                            t: 1000.3, gaze: .zero, limbs: PerchPose.action(.wave, p: 0.5, t: 1000.3).limbs)
                     .frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("My week with Ledge").font(Typo.title(17)).foregroundStyle(.white)
+                    Text("My week with \(Prefs.name)").font(Typo.title(17)).foregroundStyle(.white)
                     Text("OpenNotch · the AI in my MacBook's notch").font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
                 }
             }

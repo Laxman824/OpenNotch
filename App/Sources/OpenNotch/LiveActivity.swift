@@ -467,3 +467,72 @@ struct PlayerView: View {
         .accessibilityLabel(label)
     }
 }
+
+// MARK: - Split island
+
+/// The split-island pill: compact signs for live things that don't own the ears.
+/// Updates at most once a second (rule 7: nothing per-frame while the notch is closed).
+struct SidePill: View {
+    let items: [NotchController.EarActivity]
+    @ObservedObject var notch: NotchController
+    @ObservedObject var backend: Backend
+    @ObservedObject var timers: TimerStore
+    @ObservedObject var handsFree: HandsFree
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(items, id: \.self) { a in
+                item(a).frame(width: NotchController.pillItemWidth(a))
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(maxHeight: .infinity)
+        .background(NotchShape(radius: 11).fill(Color.black))          // hangs from the top edge like the notch
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private func item(_ a: NotchController.EarActivity) -> some View {
+        switch a {
+        case .timer:
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let colors = timers.urgent(ctx.date) ? urgentColors : timers.palette
+                let p = timers.kind == .stopwatch ? timers.liveElapsed(ctx.date).truncatingRemainder(dividingBy: 60) / 60
+                    : timers.liveProgress(ctx.date)
+                HStack(spacing: 5) {
+                    ZStack {
+                        Circle().stroke(.white.opacity(0.15), lineWidth: 2)
+                        Circle().trim(from: 0, to: max(0.001, p))
+                            .stroke(colors[0], style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                    .frame(width: 13, height: 13)
+                    Text(TimerStore.clock(timers.remaining))
+                        .font(.system(size: 12, weight: .bold, design: .rounded)).monospacedDigit()
+                        .foregroundStyle(.white.opacity(timers.paused ? 0.55 : 0.92))
+                        .lineLimit(1).fixedSize()
+                }
+            }
+            .accessibilityLabel("Timer \(TimerStore.clock(timers.remaining))")
+        case .music:
+            Image(systemName: "music.note")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(LinearGradient(colors: [Color(red: 1, green: 0.45, blue: 0.7), Color(red: 0.75, green: 0.5, blue: 1)],
+                                                startPoint: .top, endPoint: .bottom))
+                .accessibilityLabel("Playing \(backend.nowPlaying.track)")
+        case .agent:
+            let (icon, color): (String, Color) =
+                !backend.approvals.isEmpty ? ("exclamationmark.circle.fill", .yellow)
+                : backend.busy ? ("sparkles", Theme.glow[0])
+                : handsFree.isOn ? ("waveform", Color(red: 0.25, green: 0.8, blue: 1))
+                : ("checkmark.circle.fill", .green)
+            Image(systemName: icon).font(.system(size: 12, weight: .bold)).foregroundStyle(color)
+                .accessibilityLabel(!backend.approvals.isEmpty ? "Needs your OK" : backend.busy ? "Working" : "Answer ready")
+        case .awake:
+            Image(systemName: "cup.and.saucer.fill").font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.45))
+                .accessibilityLabel("Keeping awake")
+        default:
+            EmptyView()
+        }
+    }
+}

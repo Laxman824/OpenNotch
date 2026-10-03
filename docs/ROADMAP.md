@@ -40,7 +40,7 @@
 - Grow the eval set from real traces; track scores per model.
 
 ## Phase 4 — Onboarding & avatars
-- First-run flow: welcome → pick your companion (live 3D previews) → pick your AI → permissions.
+- First-run flow: ✅ in-notch welcome → AI → try one (permissions on first use). Next: companion picker with live 3D previews.
 - More avatars; **VRM** support (the open avatar format VRoid Studio exports) — needs a three.js upgrade.
 
 ## Phase 5 — Release

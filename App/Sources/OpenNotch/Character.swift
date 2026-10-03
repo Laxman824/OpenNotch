@@ -14,6 +14,8 @@ import SwiftUI
 /// Short-lived expressions from interaction; they outrank the agent mood.
 enum PuffExpression: Hashable {
     case annoyed, dizzy, love, surprised, celebrate
+    /// The superhero landing: determined brows and a confident grin.
+    case heroic
 }
 
 @MainActor
@@ -196,7 +198,8 @@ struct PuffCanvas: View {
 
             // Soft halo (gradient, not blur).
             if !tiny {
-                let r = max(w, h) * 0.8
+                // Kept inside the canvas: a halo cut off at the frame shows as a dark square on glass.
+                let r = min(max(w, h) * 0.8, s * 0.5, body.midY, sz.height - body.midY, body.midX, sz.width - body.midX)
                 g.fill(Ellipse().path(in: CGRect(x: body.midX - r, y: body.midY - r, width: r * 2, height: r * 2)),
                        with: .radialGradient(Gradient(colors: [top.opacity(mood == .sleeping ? 0.12 : 0.32), top.opacity(0)]),
                                              center: CGPoint(x: body.midX, y: body.midY), startRadius: w * 0.3, endRadius: r))
@@ -234,28 +237,39 @@ struct PuffCanvas: View {
 
             // ── Limbs, behind the body ──
             if let limbs {
-                let limbColor = bottom.opacity(0.95)
-                let edge = Color.black.opacity(0.22)
-                // Feet: two soft ovals under the body; lifted ones rise and tip.
+                let edge = Color.black.opacity(0.16)
+                // Feet: soft shaded pads under the body; lifted ones rise and tip.
                 for (side, lift) in [(-1.0, limbs.footL), (1.0, limbs.footR)] {
-                    let fw = w * 0.26, fh = h * 0.2
+                    let fw = w * 0.27, fh = h * 0.21
                     let fx = body.midX + CGFloat(side) * w * 0.2 - fw / 2
                     let fy = body.maxY - fh * 0.55 - CGFloat(lift) * s * 0.09
-                    let foot = Ellipse().path(in: CGRect(x: fx, y: fy, width: fw, height: fh))
-                    g.fill(foot, with: .color(limbColor))
-                    g.stroke(foot, with: .color(edge), lineWidth: max(0.6, s * 0.012))
+                    let r = CGRect(x: fx, y: fy, width: fw, height: fh)
+                    let foot = Ellipse().path(in: r)
+                    g.fill(foot, with: .linearGradient(Gradient(colors: [bottom, bottom.mix(.black, 0.28)]),
+                                                       startPoint: CGPoint(x: r.midX, y: r.minY), endPoint: CGPoint(x: r.midX, y: r.maxY)))
+                    g.stroke(foot, with: .color(edge), lineWidth: max(0.6, s * 0.01))
+                    if detailed {
+                        g.fill(Ellipse().path(in: CGRect(x: r.minX + fw * 0.22, y: r.minY + fh * 0.16, width: fw * 0.32, height: fh * 0.26)),
+                               with: .color(.white.opacity(0.3)))
+                    }
                 }
-                // Arms: little capsules from the shoulders.
+                // Arms: stubby jelly arms growing out of the body (same colour as the body
+                // where they join), with round mitten hands.
+                let shoulder = top.mix(bottom, 0.62)
                 for (side, angle) in [(-1.0, limbs.armL), (1.0, limbs.armR)] {
-                    let len = s * 0.24, thick = s * 0.1
+                    let len = s * 0.2, thick = s * 0.12
                     var a = g
-                    a.translateBy(x: body.midX + CGFloat(side) * w * 0.42, y: body.minY + h * 0.56)
+                    a.translateBy(x: body.midX + CGFloat(side) * w * 0.37, y: body.minY + h * 0.55)
                     a.rotate(by: .radians(-side * angle))       // raise outward on both sides
                     let r = CGRect(x: -thick / 2, y: 0, width: thick, height: len)
                     let arm = Capsule().path(in: r)
-                    a.fill(arm, with: .linearGradient(Gradient(colors: [top, bottom]),
-                                                      startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: 0, y: len)))
-                    a.stroke(arm, with: .color(edge), lineWidth: max(0.6, s * 0.012))
+                    let shade = Gradient(colors: [shoulder, shoulder.mix(bottom, 0.5).mix(.black, 0.12)])
+                    a.fill(arm, with: .linearGradient(shade, startPoint: .zero, endPoint: CGPoint(x: 0, y: len)))
+                    let hr = thick * 0.64
+                    let hand = Circle().path(in: CGRect(x: -hr, y: len - hr * 1.15, width: hr * 2, height: hr * 2))
+                    a.fill(hand, with: .radialGradient(Gradient(colors: [shoulder.mix(.white, 0.18), shoulder.mix(bottom, 0.6)]),
+                                                       center: CGPoint(x: -hr * 0.3, y: len - hr * 0.6), startRadius: 0, endRadius: hr * 1.6))
+                    a.stroke(hand, with: .color(edge), lineWidth: max(0.6, s * 0.01))
                 }
             }
 
@@ -267,6 +281,19 @@ struct PuffCanvas: View {
             g.fill(bodyPath, with: .radialGradient(Gradient(colors: [.clear, Color.black.opacity(0.18)]),
                                                    center: CGPoint(x: body.midX, y: body.minY + h * 0.35),
                                                    startRadius: w * 0.25, endRadius: w * 0.75))
+            if detailed {
+                // Jelly: light glowing through the bottom, a soft core, and a rim light on top.
+                g.fill(Ellipse().path(in: CGRect(x: body.minX + w * 0.18, y: body.maxY - h * 0.34, width: w * 0.64, height: h * 0.3)),
+                       with: .radialGradient(Gradient(colors: [bottom.mix(.white, 0.45).opacity(0.55), bottom.opacity(0)]),
+                                             center: CGPoint(x: body.midX, y: body.maxY - h * 0.16), startRadius: 0, endRadius: w * 0.34))
+                g.fill(bodyPath, with: .radialGradient(Gradient(colors: [.white.opacity(0.14), .clear]),
+                                                       center: CGPoint(x: body.midX, y: body.minY + h * 0.42),
+                                                       startRadius: 0, endRadius: w * 0.42))
+                g.stroke(bodyPath, with: .linearGradient(Gradient(colors: [.white.opacity(0.42), .white.opacity(0)]),
+                                                         startPoint: CGPoint(x: body.midX, y: body.minY),
+                                                         endPoint: CGPoint(x: body.midX, y: body.minY + h * 0.45)),
+                         lineWidth: max(1, s * 0.018))
+            }
             let sheen = CGRect(x: body.minX + w * 0.16, y: body.minY + h * 0.08, width: w * 0.34, height: h * 0.2)
             g.fill(Ellipse().path(in: sheen), with: .color(.white.opacity(0.32)))
             if !tiny {
@@ -282,7 +309,7 @@ struct PuffCanvas: View {
             let eyeY = body.midY - h * 0.02 + CGFloat(look.y) * h * 0.08
             let spread = w * 0.2
             let boost = CGFloat(phys.eyeBoost) * (expr == .surprised ? 1.25 : 1)
-            let ew = w * (tiny ? 0.2 : 0.17) * boost, eh = w * (tiny ? 0.24 : 0.215) * boost
+            let ew = w * (tiny ? 0.2 : 0.18) * boost, eh = w * (tiny ? 0.24 : 0.23) * boost
             let lw = max(1.2, s * 0.045)
 
             // Blink every ~3.8 s (sometimes double). Deterministic in t.
@@ -338,6 +365,21 @@ struct PuffCanvas: View {
                         arc(false, 0.15)
                     } else {
                         g.fill(Ellipse().path(in: e), with: .color(Self.ink))
+                        if detailed {
+                            // Iris glow in the lower half: sparkly, coloured eyes.
+                            var iris = g
+                            iris.clip(to: Ellipse().path(in: e))
+                            iris.fill(Ellipse().path(in: CGRect(x: e.minX - ew * 0.1, y: e.midY - eh * 0.05, width: ew * 1.2, height: eh * 0.85)),
+                                      with: .radialGradient(Gradient(colors: [palette.eye.opacity(0.75), palette.eye.opacity(0)]),
+                                                            center: CGPoint(x: e.midX, y: e.maxY - eh * 0.12), startRadius: 0, endRadius: ew * 0.62))
+                        }
+                        if expr == .heroic {                                         // determined brows
+                            var brow = Path()
+                            // Inner ends low, outer ends high: determined, not worried.
+                            brow.move(to: CGPoint(x: cx - ew * 0.75 * sideF, y: e.minY - eh * 0.05))
+                            brow.addLine(to: CGPoint(x: cx + ew * 0.6 * sideF, y: e.minY - eh * 0.36))
+                            g.stroke(brow, with: .color(Self.ink), style: StrokeStyle(lineWidth: lw * 0.95, lineCap: .round))
+                        }
                         // big + small catchlights
                         let big = ew * 0.36, small = ew * 0.16
                         g.fill(Circle().path(in: CGRect(x: e.midX - big * 0.15, y: e.minY + eh * 0.14, width: big, height: big)),
@@ -376,6 +418,14 @@ struct PuffCanvas: View {
                     g.fill(Ellipse().path(in: CGRect(x: body.midX - mw * 0.45, y: my + eh * 0.12, width: mw * 0.9, height: eh * 0.18)),
                            with: .color(Color(red: 1, green: 0.5, blue: 0.6)))
                 }
+            case (.heroic?, _):                                                      // confident lopsided grin
+                var p = Path()
+                p.move(to: CGPoint(x: body.midX - mw * 0.9, y: my + eh * 0.02))
+                p.addQuadCurve(to: CGPoint(x: body.midX + mw * 1.0, y: my - eh * 0.12), control: CGPoint(x: body.midX + mw * 0.1, y: my + eh * 0.42))
+                p.closeSubpath()
+                g.fill(p, with: .color(Self.ink))
+                g.fill(Ellipse().path(in: CGRect(x: body.midX - mw * 0.3, y: my + eh * 0.04, width: mw * 0.8, height: eh * 0.1)),
+                       with: .color(.white.opacity(0.9)))
             case (.annoyed?, _):                                                     // grumpy squiggle
                 var p = Path()
                 p.move(to: CGPoint(x: body.midX - mw * 0.8, y: my + eh * 0.08))
@@ -544,5 +594,18 @@ enum SoundFX {
         d.append(contentsOf: Array("data".utf8)); u32(bytes)
         samples.withUnsafeBufferPointer { d.append(Data(buffer: $0)) }
         return d
+    }
+}
+
+
+extension Color {
+    /// Linear blend toward `other` (0 = self, 1 = other), in sRGB.
+    func mix(_ other: Color, _ k: Double) -> Color {
+        let a = NSColor(self).usingColorSpace(.sRGB) ?? .white, b = NSColor(other).usingColorSpace(.sRGB) ?? .white
+        let f = CGFloat(max(0, min(1, k)))
+        return Color(red: Double(a.redComponent + (b.redComponent - a.redComponent) * f),
+                     green: Double(a.greenComponent + (b.greenComponent - a.greenComponent) * f),
+                     blue: Double(a.blueComponent + (b.blueComponent - a.blueComponent) * f),
+                     opacity: Double(a.alphaComponent + (b.alphaComponent - a.alphaComponent) * f))
     }
 }

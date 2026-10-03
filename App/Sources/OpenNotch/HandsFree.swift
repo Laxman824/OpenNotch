@@ -64,6 +64,9 @@ final class HandsFree: ObservableObject {
     private var ticker: Timer?
     private var lastHeard = Date()
     private var lastActivity = Date()
+    private var lastMicAt = Date()          // last audio buffer from the mic (watchdog)
+    private var loudSince: Date?            // talking continuously since
+    private var lastRecovery = Date.distantPast
     private var pendingText = ""          // streamed text not yet spoken
     private var spokenChars = 0           // this turn — long answers are cut short
     private var turnDone = true
@@ -179,7 +182,10 @@ final class HandsFree: ObservableObject {
     private func handle(_ e: VoiceIO.Event) {
         guard phase != .off else { return }
         switch e {
-        case .micLevel(let l): level = l
+        case .micLevel(let l):
+            level = l
+            lastMicAt = Date()
+            if l > VoiceTurn.loudLevel { if loudSince == nil { loudSince = Date() } } else { loudSince = nil }
         case .speechLevel(let l): speechLevel = l
         case .heard(let text, let final): heard(text, final: final)
         case .recognizerStopped:
@@ -214,6 +220,7 @@ final class HandsFree: ObservableObject {
     private func listen() {
         transcript = ""
         lastHeard = Date()
+        lastMicAt = Date()
         if phase != .standby { phase = .listening }
         io.listen()
     }
@@ -262,6 +269,23 @@ final class HandsFree: ObservableObject {
 
     private func tick() {
         let now = Date()
+        let listening = phase == .listening || phase == .standby || phase == .hearing
+        if let r = VoiceTurn.recovery(listening: listening, sinceMic: now.timeIntervalSince(lastMicAt),
+                                      loudFor: loudSince.map { now.timeIntervalSince($0) } ?? 0,
+                                      sinceHeard: now.timeIntervalSince(lastHeard),
+                                      sinceRecovery: now.timeIntervalSince(lastRecovery)) {
+            lastRecovery = now
+            loudSince = nil
+            switch r {
+            case .restartEngine:
+                AppLog.write("hands-free: no audio from the mic for 3 s — restarting the audio engine")
+                lastMicAt = now
+                io.recover()
+            case .restartRecognizer:
+                AppLog.write("hands-free: speech but no words for 3 s — restarting the recogniser")
+                listen()
+            }
+        }
         if phase == .hearing, now.timeIntervalSince(lastHeard) > VoiceTurn.silenceNeeded(transcript) {
             commit()
         } else if phase == .thinking,
@@ -288,7 +312,7 @@ final class HandsFree: ObservableObject {
                 stop(say: "Going quiet.")               // never an always-open server mic
             }
         } else if phase == .thinking, backend?.connected == false {
-            say("I've lost the connection to Ledge. I'll keep listening.")
+            say("I've lost the connection to \(Prefs.name). I'll keep listening.")
             turnDone = true
         }
     }
@@ -367,7 +391,7 @@ final class HandsFree: ObservableObject {
             break
         }
         guard backend?.connected == true else {
-            say("Ledge's backend is offline right now. Give it a moment.")
+            say("\(Prefs.name)'s backend is offline right now. Give it a moment.")
             return
         }
         io.stopListening()
@@ -523,6 +547,10 @@ final class VoiceIO: @unchecked Sendable {
     private var request: SFSpeechAudioBufferRecognitionRequest?
 
     private var task: SFSpeechRecognitionTask?
+    /// Bumped for every recognition task. A cancelled task still calls back with an
+    /// error; without this its "stopped" restarted listening, which cancelled the new
+    /// task, which called back… a loop that showed "Listening" but never heard a word.
+    private var taskGen = 0
     private var running = false
     private var built = false            // engine + nodes + taps exist (teardown only if so)
     private var echo = false
@@ -598,6 +626,7 @@ final class VoiceIO: @unchecked Sendable {
                 if #available(macOS 14.0, *) {
                     input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: true, duckingLevel: .min)
                 }
+                input.isVoiceProcessingInputMuted = false        // a muted VP input delivers silence
                 echo = true
             } catch {
                 echo = false
@@ -663,6 +692,9 @@ final class VoiceIO: @unchecked Sendable {
         }
         }
     }
+
+    /// The watchdog's fix for a mic that went silent without telling us.
+    func recover() { q.async { [self] in self.restartAfterRouteChange() } }
 
     private func restartAfterRouteChange() {
         guard running else { return }
@@ -753,12 +785,21 @@ final class VoiceIO: @unchecked Sendable {
             req.taskHint = .dictation
             if self.supportsOnDevice { req.requiresOnDeviceRecognition = true }
             self.lock.lock(); self.request = req; self.lock.unlock()
+            self.taskGen += 1
+            let gen = self.taskGen
             self.task = recognizer.recognitionTask(with: req) { [weak self] result, error in
                 guard let self else { return }
-                if let result {
-                    self.emit(.heard(result.bestTranscription.formattedString, final: result.isFinal))
-                } else if error != nil {
-                    self.emit(.recognizerStopped)
+                let text = result?.bestTranscription.formattedString
+                let final = result?.isFinal ?? false
+                let code = (error as NSError?)?.code
+                self.q.async {
+                    guard gen == self.taskGen else { return }            // an old (cancelled) task
+                    if let text {
+                        self.emit(.heard(text, final: final))
+                    } else if let code {
+                        AppLog.write("hands-free: recogniser stopped (\(code)) — listening again")
+                        self.emit(.recognizerStopped)
+                    }
                 }
             }
         }
@@ -767,6 +808,7 @@ final class VoiceIO: @unchecked Sendable {
     func stopListening() { q.async { [self] in self.endRecognition() } }
 
     private func endRecognition() {
+        taskGen += 1                                   // whatever the old task says next is ignored
         lock.lock()
         request?.endAudio()
         request = nil
@@ -904,6 +946,22 @@ enum SpeechText {
 
 /// Turn-taking and local voice commands — pure, so `checks/run.sh` tests them.
 enum VoiceTurn {
+    enum Recovery: Equatable { case restartEngine, restartRecognizer }
+
+    /// Hands-free said "listening" but nothing comes through: decide how to recover.
+    /// No audio buffers for 3 s → the engine died silently (sleep/wake, device switch)
+    /// → rebuild it. Clearly talking for 3 s with no words back → the recogniser is
+    /// stuck → restart it. At most one recovery every 6 s.
+    static func recovery(listening: Bool, sinceMic: TimeInterval, loudFor: TimeInterval,
+                         sinceHeard: TimeInterval, sinceRecovery: TimeInterval) -> Recovery? {
+        guard listening, sinceRecovery > 6 else { return nil }
+        if sinceMic > 3 { return .restartEngine }
+        if loudFor > 3, sinceHeard > 3 { return .restartRecognizer }
+        return nil
+    }
+
+    /// Mic RMS above this counts as someone talking (speech ≈ 0.02–0.2; a quiet room < 0.01).
+    static let loudLevel: CGFloat = 0.03
     /// The assistant's name — the standby wake word and a prefix commands may start with.
     nonisolated(unsafe) static var wakeName: String = UserDefaults.standard.string(forKey: "assistantName") ?? "Ledge"
 

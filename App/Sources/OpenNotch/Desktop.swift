@@ -16,12 +16,13 @@ import WebKit
 @MainActor
 final class DesktopCompanion: NSObject {
     static var enabled: Bool {
-        get { UserDefaults.standard.object(forKey: "desktop.on") as? Bool ?? true }
+        // Off until the user picks a companion (onboarding or Settings › Desktop).
+        get { UserDefaults.standard.object(forKey: "desktop.on") as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: "desktop.on") }
     }
 
     /// Which character walks the desktop: "ledge", "bee" or "cat".
-    static let avatarNames = [("ledge", "Ledge"), ("bee", "Bee"), ("cat", "Cat")]
+    static let avatarNames = [("ledge", "Classic"), ("bee", "Bee"), ("cat", "Cat")]
     static let avatars = avatarNames.map(\.0)
     static var avatar: String {
         get {
@@ -302,7 +303,7 @@ final class DesktopCompanion: NSObject {
         case .thinking:
             bubble("Thinking", dots: true)
         case .standby:
-            bubble("Resting", sub: "Say “Ledge” when you need me.", ttl: 4)
+            bubble("Resting", sub: "Say “\(Prefs.name)” when you need me.", ttl: 4)
         case .speaking, .starting:
             hideBubble()
         case .off:
@@ -446,6 +447,58 @@ final class DesktopCompanion: NSObject {
         }
     }
 
+    // MARK: onboarding cheerleader
+
+    /// First-run steps in the notch: once picked, he cheers you through them — bounces at
+    /// every step, points at the notch, dances when you're done. Steps: 0 hello · 1 just
+    /// picked (he drops in) · 2 brain · 3 try · 4 done · -1 skipped. Silent when he's off.
+    func cheerOnboarding(_ step: Int, tries: Int = 0) {
+        guard DesktopCompanion.enabled, window != nil else { return }
+        guard ready else {
+            // Page still loading (just switched on): keep trying for a while.
+            if tries < 20 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in self?.cheerOnboarding(step, tries: tries + 1) } }
+            return
+        }
+        let name = Prefs.name
+        let lines: [Int: (String, String)] = [
+            0: ("Hiii! I'm \(name)! 🎉", "Let me show you around — 20 seconds, promise!"),
+            1: ("Hiii! I'm here! 🎉", "That's me up in the notch too. I'll walk around and cheer you on!"),
+            2: ("Ooh, the fun part! 🧠", "Give me a brain — it's free! Hit the big button, I'll wait… (I can't wait.)"),
+            3: ("YES! Let's try something! ⚡️", "Pick any of those — I'm SO ready!"),
+            4: ("Let's gooo! 🚀", "Point at the notch or press ⌥Space whenever you need me."),
+            -1: ("No worries! 👋", "I'm right here. Point at the notch or press ⌥Space any time."),
+        ]
+        guard let (title, sub) = lines[step] else { return }
+        let delay = step == 1 ? 2.2 : 0                           // let the entrance land first
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.js("dreamer.react(\"celebrate\")")
+            self.bubble(title, sub: sub, ttl: step >= 4 || step < 0 ? 6 : 14)
+            switch step {
+            case 0...3:
+                // Bounce twice, then point at the notch and keep pointing.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) { [weak self] in self?.js("dreamer.react(\"celebrate\")") }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.4) { [weak self] in
+                    guard let self, self.notch?.onboarding == true else { return }
+                    self.pointing = true
+                    self.js("dreamer.react(\"point\")")
+                }
+            case 4:
+                self.pointing = false
+                // A little victory dance, then back to whatever the music says.
+                self.js("dreamer.setMusic(true, 150)")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                    guard let self else { return }
+                    self.lastMood = ""
+                    self.js("dreamer.setMusic(\(self.musicOn && Prefs.on(Prefs.desktopDance)))")
+                }
+            default:
+                self.pointing = false
+                self.js("dreamer.react(null)")
+            }
+        }
+    }
+
     // MARK: bubbles
 
     private struct BubbleAction { let id: String; let label: String; var primary = false }
@@ -527,7 +580,7 @@ final class DesktopCompanion: NSObject {
     private func statusChanged(busy: Bool, approval: Bool) {
         guard let notch, notch.mode != .expanded, handsFree?.isOn != true, Date() >= hiddenUntil else { return }
         if approval {
-            bubble("Need your OK", sub: backend?.approvals.first.map { "Ledge wants to run \($0.tool)" },
+            bubble("Need your OK", sub: backend?.approvals.first.map { "\(Prefs.name) wants to run \($0.tool)" },
                    actions: [BubbleAction(id: "ask", label: "Review", primary: true)])
         } else if busy {
             bubble("Thinking", dots: true)
@@ -625,11 +678,11 @@ final class DesktopCompanion: NSObject {
 
     private func showMenu() {
         let menu = NSMenu()
-        menu.addItem(withTitle: "Open Ledge", action: #selector(openLedge), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Open \(Prefs.name)", action: #selector(openLedge), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Land", action: #selector(landNow), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Take off", action: #selector(takeOffNow), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Hide desktop Ledge", action: #selector(hide), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Hide from the desktop", action: #selector(hide), keyEquivalent: "").target = self
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 

@@ -144,7 +144,7 @@ struct ContextSuggestions: View {
             } else if !c.finderPaths.isEmpty, !backend.attachments.contains(where: { $0.kind == .file }) {
                 chip(icon: "folder", text: "\(c.finderPaths.count) selected in Finder", subtle: true) { model.attachFinder() }
             } else if let name = c.needsAutomationFor {
-                chip(icon: "lock.open", text: "Let Ledge read \(name)") { model.allowAutomation() }
+                chip(icon: "lock.open", text: "Let \(Prefs.name) read \(name)") { model.allowAutomation() }
             } else if c.selectedText == nil, !AXIsProcessTrusted(), !model.accessibilityHintDismissed,
                       !c.appName.isEmpty {
                 chip(icon: "hand.raised", text: "Allow Accessibility to use selected text") {

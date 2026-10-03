@@ -30,6 +30,38 @@ enum DailyTools {
         return r == noErr ? nil : "Permission to control \(appName) was declined."
     }
 
+    /// Mail.app can be scripted but have no account at all (never signed in): then the
+    /// inbox is just empty and a draft can't be sent. Say so instead of "no email".
+    /// Background jobs (morning brief) never launch Mail or ask for permission: only
+    /// read it when it's already open and allowed.
+    static func mailBackgroundSkip() -> String? {
+        guard ToolKit.background else { return nil }
+        let running = NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.apple.mail" }
+        guard running, ContextGrabber.automationStatus("com.apple.mail") == noErr else {
+            return "Skipped email: Mail isn't open (background jobs don't launch it)."
+        }
+        return nil
+    }
+
+    static func mailAccountProblem() async -> String? {
+        let r = script("tell application \"Mail\" to return count of accounts", timeout: 20)
+        guard r.ok else { return "Mail didn't answer: \(r.out)" }
+        guard Int(r.out.trimmingCharacters(in: .whitespacesAndNewlines)) == 0 else { return nil }
+        // An email connector (MCP) may already be set up: point the model at it.
+        let connector = await MainActor.run {
+            MCPManager.shared.tools.map(\.name).filter { $0.range(of: #"mail|gmail|outlook|inbox"#, options: [.regularExpression, .caseInsensitive]) != nil }
+        }
+        if !connector.isEmpty {
+            return "Mail.app has no account, but an email connector is connected — use its tools instead: "
+                + connector.prefix(8).joined(separator: ", ") + "."
+        }
+        return "Mail.app has no email account set up, so there's no inbox to read and nothing to send from. "
+            + "Tell the user the two easy ways, and offer to open the first: "
+            + "(1) add their account (Gmail, Outlook, iCloud, Yahoo…) in System Settings › Internet Accounts — open it with "
+            + "the open tool, url x-apple.systempreferences:com.apple.Internet-Accounts-Settings.extension — then switch Mail on "
+            + "for it; or (2) connect an email connector (MCP server, e.g. for Gmail) in OpenNotch Settings › AI › Connectors."
+    }
+
     static func script(_ src: String, timeout: TimeInterval = 25) -> (ok: Bool, out: String) {
         let r = Proc.run("/usr/bin/osascript", ["-e", src], timeout: timeout)
         return (r.status == 0 && !r.timedOut, r.status == 0 ? r.out : (r.timedOut ? "timed out" : r.err))
@@ -75,7 +107,9 @@ enum DailyTools {
                                    "unread_only": Schema.boolean("Only unread messages")]),
             risk: .read, verb: "Checking your email", detail: { $0.bool("unread_only") ? "unread" : "recent" }, preview: { _ in "" },
             run: { a in
+                if let p = mailBackgroundSkip() { return .fail(p) }
                 if let p = await ensureAutomation("com.apple.mail", "Mail") { return .fail(p) }
+                if let p = await mailAccountProblem() { return .fail(p) }
                 let days = min(14, max(1, a.int("days") ?? 2))
                 let unread = a.bool("unread_only")
                 let src = """
@@ -106,7 +140,9 @@ enum DailyTools {
             risk: .read, verb: "Reading an email", detail: { "#\($0.int("id") ?? 0)" }, preview: { _ in "" },
             run: { a in
                 guard let id = a.int("id") else { return .fail("id is required") }
+                if let p = mailBackgroundSkip() { return .fail(p) }
                 if let p = await ensureAutomation("com.apple.mail", "Mail") { return .fail(p) }
+                if let p = await mailAccountProblem() { return .fail(p) }
                 let r = script("""
                 tell application "Mail"
                   set m to first message of inbox whose id is \(id)
@@ -117,7 +153,7 @@ enum DailyTools {
             }),
         AgentTool(
             name: "mail_draft",
-            description: "Open a new email draft in Mail.app for the user to review and send themselves. Never sends.",
+            description: "Open a new email draft in Mail.app for the user to review (and edit) before it's sent. Use mail_send to send.",
             schema: Schema.object(["to": Schema.string("Recipient email address(es), comma-separated"),
                                    "subject": Schema.string("Subject"), "body": Schema.string("Plain-text body")],
                                   required: ["to", "subject", "body"]),
@@ -125,7 +161,9 @@ enum DailyTools {
             preview: { a in "To: \(a.str("to") ?? "")\nSubject: \(a.str("subject") ?? "")\n\n" + String((a.str("body") ?? "").prefix(500)) },
             run: { a in
                 guard let to = a.str("to"), let subject = a.str("subject") else { return .fail("to and subject are required") }
+                if let p = mailBackgroundSkip() { return .fail(p) }
                 if let p = await ensureAutomation("com.apple.mail", "Mail") { return .fail(p) }
+                if let p = await mailAccountProblem() { return .fail(p) }
                 let recipients = to.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
                 let adds = recipients.map { "make new to recipient at end of to recipients with properties {address:\"\(esc($0))\"}" }
                     .joined(separator: "\n    ")
@@ -138,8 +176,56 @@ enum DailyTools {
                   activate
                 end tell
                 """)
-                return r.ok ? ToolOutcome(ok: true, text: "Draft opened in Mail for you to review and send (not sent).")
+                return r.ok ? ToolOutcome(ok: true, text: "Draft opened in Mail — not sent yet. The user can edit it there; "
+                                          + "send it with mail_send (same subject) when they say so, or they press Send (⇧⌘D).")
                     : .fail("Couldn't create the draft: \(r.out)")
+            }),
+        AgentTool(
+            name: "mail_send",
+            description: "Send an email from Mail.app. Always shows the user the full email and waits for their OK. "
+                + "If a draft with this subject is open in Mail (from mail_draft), that draft is sent as it is now — "
+                + "including any edits the user made there. Only call this when the user asked to send.",
+            schema: Schema.object(["to": Schema.string("Recipient email address(es), comma-separated"),
+                                   "subject": Schema.string("Subject"), "body": Schema.string("Plain-text body")],
+                                  required: ["to", "subject", "body"]),
+            risk: .confirm, verb: "Sending an email", detail: { $0.str("to") ?? "" },
+            preview: { a in "SEND to: \(a.str("to") ?? "")\nSubject: \(a.str("subject") ?? "")\n\n" + String((a.str("body") ?? "").prefix(800))
+                + "\n\n(If this draft is open in Mail, it's sent as it is there, with your edits.)" },
+            run: { a in
+                guard let to = a.str("to"), let subject = a.str("subject") else { return .fail("to and subject are required") }
+                if ToolKit.background { return .fail("Email is never sent from a background job.") }
+                if let p = await ensureAutomation("com.apple.mail", "Mail") { return .fail(p) }
+                if let p = await mailAccountProblem() { return .fail(p) }
+                let recipients = to.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                guard !recipients.isEmpty, recipients.allSatisfy({ $0.contains("@") && !$0.contains(" ") }) else {
+                    return .fail("That doesn't look like an email address: \(to)")
+                }
+                let adds = recipients.map { "make new to recipient at end of to recipients with properties {address:\"\(esc($0))\"}" }
+                    .joined(separator: "\n      ")
+                // Prefer the open draft (keeps the user's edits); else compose and send.
+                let r = script("""
+                tell application "Mail"
+                  set openDrafts to (every outgoing message whose subject is "\(esc(subject))")
+                  if (count of openDrafts) > 0 then
+                    set msg to item 1 of openDrafts
+                    set how to "draft"
+                  else
+                    set msg to make new outgoing message with properties {subject:"\(esc(subject))", content:"\(esc(a.str("body") ?? ""))", visible:false}
+                    tell msg
+                      \(adds)
+                    end tell
+                    set how to "new"
+                  end if
+                  set ok to send msg
+                  return how & ":" & (ok as string)
+                end tell
+                """, timeout: 40)
+                guard r.ok else { return .fail("Mail couldn't send it: \(r.out)") }
+                let parts = r.out.split(separator: ":")
+                guard parts.last == "true" else { return .fail("Mail didn't send it (it may be waiting in your Outbox — check Mail).") }
+                return ToolOutcome(ok: true, text: parts.first == "draft"
+                                   ? "Sent the open draft “\(subject)” from Mail."
+                                   : "Sent “\(subject)” to \(recipients.joined(separator: ", ")) from Mail.")
             }),
     ]
 
@@ -241,9 +327,7 @@ enum DailyTools {
             schema: Schema.object([:]),
             risk: .read, verb: "Checking reminders", detail: { _ in "" }, preview: { _ in "" },
             run: { _ in
-                guard EKEventStore.authorizationStatus(for: .reminder) == .fullAccess else {
-                    return .fail("Reminders access isn't allowed — turn it on in Settings › Permissions.")
-                }
+                if let no = await ToolKit.ensureAccess(.reminder) { return .fail(no) }
                 let store = ToolKit.eventStore
                 let pred = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
                 let rows: [String] = await withCheckedContinuation { c in

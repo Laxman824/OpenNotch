@@ -54,6 +54,16 @@ function puff(cx, cy, s, t, o = {}) {
   g = ctx.createRadialGradient(bmx, by + h * 0.35, w * 0.25, bmx, by + h * 0.35, w * 0.75);
   g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,0.18)");
   ctx.fillStyle = g; body(); ctx.fill();
+  // jelly: light through the bottom, a soft core, a rim light on top (as in Character.swift)
+  g = ctx.createRadialGradient(bmx, by + h * 0.84, 0, bmx, by + h * 0.84, w * 0.34);
+  g.addColorStop(0, "rgba(255,190,220,0.55)"); g.addColorStop(1, "rgba(255,122,179,0)");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(bmx, by + h * 0.81, w * 0.32, h * 0.15, 0, 0, Math.PI * 2); ctx.fill();
+  g = ctx.createRadialGradient(bmx, by + h * 0.42, 0, bmx, by + h * 0.42, w * 0.42);
+  g.addColorStop(0, "rgba(255,255,255,0.14)"); g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g; body(); ctx.fill();
+  g = ctx.createLinearGradient(0, by, 0, by + h * 0.45);
+  g.addColorStop(0, "rgba(255,255,255,0.42)"); g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.strokeStyle = g; ctx.lineWidth = Math.max(1, s * 0.018); body(); ctx.stroke();
   ctx.fillStyle = "rgba(255,255,255,0.32)";
   ctx.beginPath(); ctx.ellipse(bx + w * 0.33, by + h * 0.18, w * 0.17, h * 0.1, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = "rgba(255,255,255,0.45)";
@@ -64,7 +74,7 @@ function puff(cx, cy, s, t, o = {}) {
   if (mood === "working") look = { x: Math.sin(t * 2.6) * 0.55, y: 0.35 };
   const eyeY = bmy - h * 0.02 + look.y * h * 0.08;
   const spread = w * 0.2, boost = (o.boost || 1) * (expr === "surprised" ? 1.25 : 1);
-  const ew = w * 0.17 * boost, eh = w * 0.215 * boost, lw = Math.max(1.2, s * 0.045);
+  const ew = w * 0.18 * boost, eh = w * 0.23 * boost, lw = Math.max(1.2, s * 0.045);
   const period = 3.8, cyc = Math.floor(t / period), ph = t - cyc * period;
   const blinking = !o.noBlink && (ph > period - 0.12 || (cyc % 4 === 1 && ph > period - 0.38 && ph < period - 0.27));
   ctx.strokeStyle = INK; ctx.fillStyle = INK; ctx.lineCap = "round";
@@ -94,6 +104,11 @@ function puff(cx, cy, s, t, o = {}) {
       arc(false, 0.15);
     } else {
       ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(ex, ey, ew2 / 2, eh2 / 2, 0, 0, Math.PI * 2); ctx.fill();
+      // iris glow in the lower half: sparkly, coloured eyes
+      ctx.save(); ctx.beginPath(); ctx.ellipse(ex, ey, ew2 / 2, eh2 / 2, 0, 0, Math.PI * 2); ctx.clip();
+      const ig = ctx.createRadialGradient(ex, ey + eh2 / 2 - eh * 0.12, 0, ex, ey + eh2 / 2 - eh * 0.12, ew * 0.62);
+      ig.addColorStop(0, "rgba(158,237,255,0.75)"); ig.addColorStop(1, "rgba(158,237,255,0)");
+      ctx.fillStyle = ig; ctx.fillRect(ex - ew2, ey - eh2, ew2 * 2, eh2 * 2); ctx.restore();
       const big = ew * 0.36, small = ew * 0.16;
       ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.beginPath(); ctx.arc(ex - big * 0.15 + big / 2, ey - eh2 / 2 + eh * 0.14 + big / 2, big / 2, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.beginPath(); ctx.arc(ex - ew2 / 2 + ew * 0.2 + small / 2, ey + eh2 / 2 - eh * 0.34 + small / 2, small / 2, 0, Math.PI * 2); ctx.fill();

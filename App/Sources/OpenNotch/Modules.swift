@@ -11,7 +11,7 @@ enum Module: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .chat: return "Ledge"
+        case .chat: return Prefs.name
         case .files: return "Find files"
         case .menubar: return "Menu bar"
         case .clipboard: return "Clipboard"
@@ -301,7 +301,7 @@ struct DropZones: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            zone("Ask Ledge", icon: "sparkles") { urls in
+            zone("Ask \(Prefs.name)", icon: "sparkles") { urls in
                 backend.attachDropped(urls)
                 hub.module = .chat
                 notch.expand(pinned: true, focus: true)

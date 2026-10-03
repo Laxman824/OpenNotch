@@ -159,6 +159,47 @@ enum AgentChecks {
         #endif
     }
 
+    @MainActor private static func uxPolish() {
+        // Onboarding: which "brain" step shows.
+        check("onboarding: no AI", OnboardingLogic.brain(connected: false, kind: .openrouter) == .none)
+        check("onboarding: apple", OnboardingLogic.brain(connected: true, kind: .apple) == .apple)
+        check("onboarding: other", OnboardingLogic.brain(connected: true, kind: .groq) == .other(ProviderKind.groq.label))
+        // Onboarding landing curves and stage spots.
+        check("landing: falls from top to ground", OnboardingLogic.fall(0) == 0 && OnboardingLogic.fall(OnboardingLogic.fallTime) == 1
+              && OnboardingLogic.fall(OnboardingLogic.fallTime / 2) < 0.5)
+        check("landing: slam squashes, then settles", OnboardingLogic.impactSquash(OnboardingLogic.fallTime) > 0.5
+              && abs(OnboardingLogic.impactSquash(OnboardingLogic.fallTime + 0.9)) < 0.02)
+        check("landing: shake starts and ends still", OnboardingLogic.shake(0) == 0 && OnboardingLogic.shake(1) == 0)
+        check("stage: every step has a spot and a line", (0..<OnboardingLogic.steps).allSatisfy {
+            (0...1).contains(OnboardingLogic.spot($0)) && !OnboardingLogic.line($0).isEmpty })
+        check("allow-for-chat: never covers sending email", TurnPolicy.allowKey(tool: "mail_send", args: ["to": "a@b.co"]) == nil)
+        // Closed notch with several things live: the extras go in the side pill.
+        let O = NotchController.others
+        check("pill: timer owns ears, music in the pill", O(.timer, false, true, true, false) == [.music])
+        check("pill: agent + timer + music → two extras", O(.agent, true, true, true, true) == [.timer, .music])
+        check("pill: nothing extra during a HUD or alone", O(.hud, true, true, true, true).isEmpty && O(.music, false, false, true, false).isEmpty)
+        // Onboarding name step: a usable name (also the wake word), and must-NOTs.
+        let N = OnboardingLogic.cleanName
+        check("name: keeps a plain name", N("  Nova ") == "Nova" && N("Mr  Bolt") == "Mr Bolt" && N("Zoë") == "Zoë")
+        check("name: rejects empty/long/odd", N("") == nil && N("   ") == nil && N(String(repeating: "a", count: 21)) == nil
+              && N("rm -rf; ls") == nil && N("123") == nil && N("<b>") == nil)
+        check("name: no other product's character", !OnboardingLogic.nameIdeas.contains("Mochi"))
+        check("onboarding: buddy cheers only on brain/try", OnboardingLogic.cheer(3) == 2 && OnboardingLogic.cheer(4) == 3
+              && OnboardingLogic.cheer(0) == nil && OnboardingLogic.cheer(2) == nil)
+        check("landing: one full flip", abs(OnboardingLogic.spin(OnboardingLogic.fallTime) + 2 * .pi) < 1e-9 && OnboardingLogic.spin(0) == 0)
+        // Steps: a finished run of tool/thinking rows folds into one; a single row stays as is.
+        func tool(_ id: String, _ state: String = "done", _ verb: String = "Looking") -> Item {
+            Item(id: id, kind: .tool(state: state, icon: "◆", verb: verb, detail: "", error: nil), text: "")
+        }
+        let items = [Item(id: "u", kind: .user, text: "hi"), Item(id: "t", kind: .thinking, text: ""), tool("a"),
+                     tool("b", "error", "Reading"), Item(id: "x", kind: .assistant, text: "ok"), tool("c")]
+        let seg = StepGroup.segments(items, live: false)
+        check("steps: grouped", seg.map(\.items.count) == [1, 3, 1, 1])
+        check("steps: counts", seg[1].steps == 2 && seg[1].failed == 1 && seg[1].toolVerbs == ["Looking", "Reading"])
+        check("steps: only the trailing run is live", StepGroup.segments(items + [tool("d")], live: true).last?.live == true
+              && StepGroup.segments(items, live: true)[1].live == false)
+    }
+
     private static func presence() {
         let C = PresenceLogic.classify
         check("clip: link", C("https://swift.org/documentation/") == .clipLink)
@@ -414,6 +455,7 @@ enum AgentChecks {
         turnPolicy()
         recallAndMore()
         presence()
+        uxPolish()
 
         print(failed == 0 ? "agent: \(total)/\(total) pass" : "agent: \(failed) of \(total) FAILED")
         return failed == 0 ? 0 : 1

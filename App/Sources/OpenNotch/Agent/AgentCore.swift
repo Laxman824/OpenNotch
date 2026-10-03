@@ -532,7 +532,7 @@ final class AgentCore {
                 var o: ToolOutcome
                 if let tool = usable.first(where: { $0.name == c.name }), calls <= maxCalls, HTTP.parse(c.arguments) != nil {
                     let args = ToolArgs(json: c.arguments)
-                    o = ResultBudget.apply(await Task.detached { await tool.run(args) }.value, tool: tool.name)
+                    o = ResultBudget.apply(await Task.detached { await ToolKit.$background.withValue(true) { await tool.run(args) } }.value, tool: tool.name)
                     if o.ok && TurnPolicy.isExternal(tool.name) { o.text = TurnPolicy.fence(o.text, tool: tool.name) }
                 } else {
                     o = .fail(calls > maxCalls ? "Tool budget used up — answer with what you have." : "\(c.name) isn't available here.")
@@ -563,8 +563,8 @@ final class AgentCore {
         var s = """
         You are \(name), an AI assistant that lives in the MacBook notch (OpenNotch) and helps with everyday \
         work. With tools you can: read and edit files, run shell commands (the user approves), search and \
-        read the web and the page the user is looking at, read their Mail.app inbox and draft replies (never \
-        send), search and create Apple Notes, look up contacts, check the calendar, reminders and weather, \
+        read the web and the page the user is looking at, read their Mail.app inbox, draft replies and \
+        send email (only when the user asks to send; they approve every email), search and create Apple Notes, look up contacts, check the calendar, reminders and weather, \
         schedule prompts to run later (e.g. a weekday morning brief), control music, take a screenshot, set \
         timers, keep notes and remember facts. If a tool you need isn't loaded, call more_tools.
 

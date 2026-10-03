@@ -211,7 +211,7 @@ struct ClipboardView: View {
         }
         .contextMenu {
             Button("Copy") { store.copy(c) }
-            Button("Ask Ledge about this") {
+            Button("Ask \(Prefs.name) about this") {
                 if let p = c.imagePath { backend.attach(Attachment(kind: .screenshot, value: p)) }
                 else if let t = c.text { backend.attach(Attachment(kind: .clipboard, value: t)) }
                 hub.module = .chat
@@ -326,7 +326,7 @@ struct ShelfView: View {
         .contextMenu {
             Button("Open") { NSWorkspace.shared.open(URL(fileURLWithPath: item.path)) }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) }
-            Button("Ask Ledge about it") {
+            Button("Ask \(Prefs.name) about it") {
                 backend.attach(Attachment(kind: .file, value: item.path))
                 hub.module = .chat
             }
@@ -387,7 +387,7 @@ struct NotesView: View {
                         backend.attach(Attachment(kind: .clipboard, value: store.text))
                         backend.send("Tidy up these notes: fix typos, group related points, and turn any to-dos into a checklist.")
                         hub.module = .chat
-                    } label: { Label("Tidy with Ledge", systemImage: "sparkles").font(.system(size: 11)) }
+                    } label: { Label("Tidy with \(Prefs.name)", systemImage: "sparkles").font(.system(size: 11)) }
                         .buttonStyle(.plain).foregroundStyle(Theme.secondary)
                         .disabled(store.text.isEmpty)
                 }
@@ -550,7 +550,7 @@ struct FilesView: View {
             }
             if store.results.isEmpty {
                 EmptyHint(icon: store.notice == nil ? "doc.text.magnifyingglass" : "lock.shield",
-                          text: store.notice ?? (store.query.count < 2 ? "Type to search file names and what's inside them.\nOr just ask Ledge: “find my offer letter PDF”."
+                          text: store.notice ?? (store.query.count < 2 ? "Type to search file names and what's inside them.\nOr just ask \(Prefs.name): “find my offer letter PDF”."
                                                       : (store.searching ? "Searching…" : "Nothing found.")))
             } else {
                 ScrollView {
@@ -585,7 +585,7 @@ struct FilesView: View {
         .contextMenu {
             Button("Open") { NSWorkspace.shared.open(URL(fileURLWithPath: f.path)) }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: f.path)]) }
-            Button("Ask Ledge about it") {
+            Button("Ask \(Prefs.name) about it") {
                 backend.attach(Attachment(kind: .file, value: f.path)); hub.module = .chat
             }
             Button("Keep on Shelf") { hub.shelf.add([URL(fileURLWithPath: f.path)]) }

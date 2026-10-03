@@ -174,6 +174,7 @@ struct ModuleTab: View {
             if inside { hovered = module; bumps += 1 } else if hovered == module { hovered = nil }
         }
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHover)
+        .help(module.blurb)
         .accessibilityLabel(module.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }

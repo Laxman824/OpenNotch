@@ -157,6 +157,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         desktop.backend = backend
         desktop.handsFree = handsFree
         desktop.hub = hub
+        // The desktop companion is opt-in now; people who had it before (by the old default) keep it.
+        if UserDefaults.standard.object(forKey: "desktop.on") == nil, UserDefaults.standard.bool(forKey: Prefs.onboardingDone) {
+            DesktopCompanion.enabled = true
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.desktop.start() }
         for k in hub.captures.hotKeysFailed { backend.notice("\(k) is already used by another app.") }
 
@@ -248,11 +252,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ToolHost.hub = hub
         ToolHost.notch = notch
         Task { await MCPManager.shared.reload() }
-        // First run: the permission checklist, once.
+        // First run: the welcome steps inside the notch, once, after the hello.
+        // Permissions are asked when a feature first needs them.
         if !UserDefaults.standard.bool(forKey: Prefs.onboardingDone) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
-                SettingsWindow.shared.show(.permissions, welcome: true)
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in self?.notch.startOnboarding() }
         }
         if UserDefaults.standard.bool(forKey: "handsfree.autostart") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.handsFree.start() }
@@ -282,6 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if name == "player" { self.notch.openPlayer(hold: 5); return }     // the hover music player
                 if name == "mirror" { self.notch.openMirror(hold: 6); return }     // camera mirror
                 if name == "peek" { self.notch.peekaboo(); return }                // Puff says hi
+                if name == "welcome" { self.notch.startOnboarding(); return }      // the first-run steps again
                 if name == "notestest" {                                          // dev: 20 s of call notes, no call needed
                     MeetingNotes.shared.start(app: "Test call")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 20) { MeetingNotes.shared.stop() }

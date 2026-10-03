@@ -99,6 +99,16 @@ enum PerchPose {
         return pose
     }
 
+    /// The superhero landing: one fist on the ground, the other arm thrown back, a knee up.
+    static func hero() -> Pose {
+        var pose = Pose()
+        pose.limbs.armR = 0.05                      // fist down to the floor
+        pose.limbs.armL = 1.9                       // arm flung back and up
+        pose.limbs.footL = 0.35
+        pose.gaze = CGPoint(x: 0.35, y: 0.1)
+        return pose
+    }
+
     /// Watching something with you: settled, eyes on the screen below.
     static func watching() -> Pose {
         var pose = Pose()
@@ -216,7 +226,7 @@ final class PerchSprites {
         case "idle": return 48            // 4 s breathing loop
         case "typing", "dance": return 12 // 1 s
         case "sleep": return 16           // zzz drifting up, at 4 fps → 4 s
-        case "watch": return 1
+        case "watch", "hero": return 1
         default: return max(1, Int(((PerchAction(rawValue: clip)?.duration ?? 1) * fps).rounded()))
         }
     }
@@ -230,6 +240,7 @@ final class PerchSprites {
         case "dance": pose = PerchPose.dance(t: t)
         case "sleep": pose = PerchPose.asleep()
         case "watch": pose = PerchPose.watching()
+        case "hero": pose = PerchPose.hero()
         case "idle": pose = PerchPose.action(.idle, p: 0, t: t)
         default:
             let a = PerchAction(rawValue: k.clip) ?? .idle

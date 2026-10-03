@@ -10,6 +10,7 @@ enum CharacterSheet {
         ("stretch", PerchPose.action(.stretch, p: 0.5, t: 1000.3)), ("yawn", PerchPose.action(.yawn, p: 0.5, t: 1000.3)),
         ("kick", PerchPose.action(.kick, p: 0.5, t: 1000.17)), ("walk", PerchPose.action(.walk, p: 0.5, t: 1000.14)),
         ("typing", PerchPose.typing(t: 1000.07)), ("dance", PerchPose.dance(t: 1000.1)), ("asleep", PerchPose.asleep()),
+        ("hero landing", PerchPose.hero()),
     ]
 
     static func render(to path: String) -> Int32 {
@@ -50,6 +51,8 @@ enum CharacterSheet {
                 ForEach(Self.perchPoses, id: \.0) { p in
                     VStack(spacing: 6) {
                         PuffCanvas(size: 100, mood: p.1.mood ?? .idle, palette: palette, t: t, gaze: p.1.gaze ?? CGPoint(x: 0.3, y: 0.1),
+                                   phys: PuffPhysics(squash: p.0 == "hero landing" ? 0.12 : 0, sway: p.0 == "hero landing" ? 0.16 : 0,
+                                                     expression: p.0 == "hero landing" ? .heroic : nil),
                                    limbs: p.1.limbs)
                             .frame(width: 100, height: 100).offset(y: -p.1.bob * 100)
                         Text(p.0).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.7))

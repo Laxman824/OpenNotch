@@ -54,6 +54,7 @@ final class NotchController: ObservableObject {
     @Published var fileDrag = false        // a file is being dragged over the notch
     @Published var showPalette = false     // ⌘K command palette over the open notch
     @Published var showHistory = false     // ⌘Y chat history over the open notch
+    @Published var onboarding = false      // first-run steps over the open notch (Onboarding.swift)
     let camera = CameraIO()
     /// The expanded panel is built once, shortly after launch, and kept.
     @Published var panelWarm = false
@@ -73,6 +74,10 @@ final class NotchController: ObservableObject {
     let panel: NotchPanel
     private var screenFrame: NSRect = .zero
     private var screenObserver: NSObjectProtocol?
+    /// A menu from the notch (⋯, model picker) is open: its items sit outside the
+    /// shape, so pointing at them must not count as leaving.
+    private var menuOpen = false
+    private var menuObservers: [NSObjectProtocol] = []
     private var timer: Timer?
     private var leftAt: Date?
     private var hoverSince: Date?
@@ -97,6 +102,15 @@ final class NotchController: ObservableObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         panel.ignoresMouseEvents = true
         relayout()
+        for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
+            menuObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.menuOpen = open
+                    if !open { self.leftAt = nil }       // start the grace period afresh
+                }
+            })
+        }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.relayout() }
@@ -198,6 +212,31 @@ final class NotchController: ObservableObject {
         if KeepAwake.shared.isOn { return .awake }
         return .none
     }
+
+    /// Live things that don't own the ears right now — shown in a small pill beside the
+    /// closed notch (like a split Dynamic Island), so a timer and music both stay visible.
+    var otherActivities: [EarActivity] {
+        Self.others(primary: earActivity,
+                    agent: (backend?.busy ?? false) || !(backend?.approvals.isEmpty ?? true)
+                        || (handsFree?.isOn ?? false) || (backend?.unseenAnswer ?? false),
+                    timer: hub?.timers.kind != nil, music: backend?.nowPlaying.playing ?? false,
+                    awake: KeepAwake.shared.isOn)
+    }
+
+    /// Pure rule (checked): everything active except the primary, in priority order, at
+    /// most two; nothing extra while a quick system pop-up owns the notch.
+    nonisolated static func others(primary: EarActivity, agent: Bool, timer: Bool, music: Bool, awake: Bool) -> [EarActivity] {
+        guard primary != .hud, primary != .none else { return [] }
+        var out: [EarActivity] = []
+        if agent && primary != .agent { out.append(.agent) }
+        if timer && primary != .timer { out.append(.timer) }
+        if music && primary != .music { out.append(.music) }
+        if awake && primary != .awake { out.append(.awake) }
+        return Array(out.prefix(2))
+    }
+
+    /// Width of one item in the side pill.
+    nonisolated static func pillItemWidth(_ a: EarActivity) -> CGFloat { a == .timer ? 66 : 26 }
 
     /// Music gets wider ears for art + wave + title; timers for the ring + clock.
     var earWidth: CGFloat {
@@ -305,7 +344,9 @@ final class NotchController: ObservableObject {
                 hoverSince = Date()
                 if mode == .collapsed { withAnimation(Motion.hover) { hovering = true } }
             }
-            if Date().timeIntervalSince(hoverSince!) > 0.2 {
+            // 0.35 s: long enough that sweeping past to the menu bar doesn't open a
+            // 700-pt panel, short enough to feel immediate. A file drag opens at once.
+            if Date().timeIntervalSince(hoverSince!) > (dragging ? 0.15 : 0.35) {
                 hoverSince = nil
                 // Music in the ears: drop out the compact player, not the whole panel.
                 if mode == .collapsed && earActivity == .music && !dragging && Prefs.on(Prefs.playerHover) { openPlayer() } else { expand(pinned: false) }
@@ -323,12 +364,13 @@ final class NotchController: ObservableObject {
                 withAnimation(Motion.close) { mode = .collapsed }
             }
         case .expanded:
-            let holding = pinned || dragging || !(backend?.approvals.isEmpty ?? true)
+            let holding = pinned || dragging || menuOpen || !(backend?.approvals.isEmpty ?? true)
             if over || holding {
                 leftAt = nil
             } else if leftAt == nil {
                 leftAt = Date()
-            } else if Date().timeIntervalSince(leftAt!) > 0.35 {
+            } else if Date().timeIntervalSince(leftAt!) > 0.7 {
+                // Grace period: drifting a little outside while reading shouldn't close it.
                 collapse()
             }
         }
@@ -411,8 +453,14 @@ final class NotchController: ObservableObject {
     var onOpen: (() -> Void)?
 
     func expand(pinned pin: Bool, focus: Bool = false) {
+        // Opened before the panel was pre-warmed: build it first, then animate on the
+        // next run-loop pass, so the first open doesn't lay out views mid-animation.
+        if !panelWarm {
+            panelWarm = true
+            DispatchQueue.main.async { [weak self] in self?.expand(pinned: pin, focus: focus) }
+            return
+        }
         if mode != .expanded { onOpen?() }
-        panelWarm = true
         liveWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
             guard let self, self.mode == .expanded else { return }
@@ -488,6 +536,17 @@ final class NotchController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
             self?.showAlert(.info(icon: "lock.shield", text: "Allow \(what) in the macOS dialog"), for: 6)
         }
+    }
+
+    /// First run: open pinned with the welcome steps (instead of a Settings window).
+    func startOnboarding() {
+        if mode == .expanded { onboarding = true; pinned = true; return }
+        guard mode == .collapsed || mode == .hello else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.startOnboarding() }
+            return
+        }
+        onboarding = true
+        expand(pinned: true)
     }
 
     func toggleFromHotkey() {

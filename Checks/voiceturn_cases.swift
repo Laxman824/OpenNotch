@@ -45,5 +45,13 @@ if !ev.contains("add “Dentist” to your calendar") { vfailed += 1; print("FAI
 let mcp = VoiceTurn.approvalPhrase(tool: "mcp__github__create_issue", args: [:])
 if !mcp.contains("use github to create issue") { vfailed += 1; print("FAIL phrase mcp: \(mcp)") }
 if VoiceTurn.approvalShort("edit_file") != "Edit file" { vfailed += 1; print("FAIL short label") }
-print(vfailed == 0 ? "voiceturn: 43/43 pass" : "voiceturn: \(vfailed) FAILED")
+// Watchdog: recover only when listening, never twice within 6 s, and not while words are coming.
+let R = VoiceTurn.recovery
+vcheck("watchdog: dead mic", R(true, 4, 0, 1, 60) == .restartEngine)
+vcheck("watchdog: stuck recogniser", R(true, 0.1, 3.5, 4, 60) == .restartRecognizer)
+vcheck("watchdog: words arriving", R(true, 0.1, 5, 0.5, 60) == nil)
+vcheck("watchdog: quiet room", R(true, 0.1, 0, 20, 60) == nil)
+vcheck("watchdog: not listening", R(false, 10, 10, 10, 60) == nil)
+vcheck("watchdog: rate limited", R(true, 10, 0, 1, 2) == nil)
+print(vfailed == 0 ? "voiceturn: 49/49 pass" : "voiceturn: \(vfailed) FAILED")
 if vfailed > 0 { exit(1) }

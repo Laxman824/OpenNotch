@@ -21,8 +21,12 @@ enum Theme {
     static let tertiary = Color.white.opacity(0.35)
 }
 
-/// Black shape hanging from the top edge: square top (it merges into the bezel
-/// and the real notch), rounded bottom corners.
+/// Black shape hanging from the top edge: rounded bottom corners, and concave
+/// "shoulders" at the top that flare out into the bezel, so an open panel looks
+/// like it pours out of the notch instead of a box sliding down. The shoulders
+/// grow with the radius (≈ 1 pt closed, ≈ 10 pt open), so they animate with it
+/// and the closed notch keeps the hardware outline. They're drawn just outside
+/// `rect`; the window leaves room for them.
 struct NotchShape: Shape {
     var radius: CGFloat
     var animatableData: CGFloat {
@@ -30,15 +34,21 @@ struct NotchShape: Shape {
         set { radius = newValue }
     }
 
+    static func shoulder(for radius: CGFloat) -> CGFloat { min(10, max(0, (radius - 8) * 0.55)) }
+
     func path(in r: CGRect) -> Path {
         var p = Path()
         let rad = min(radius, r.height / 2, r.width / 2)
-        p.move(to: CGPoint(x: r.minX, y: r.minY))
-        p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        let sh = min(Self.shoulder(for: radius), r.height / 2)
+        p.move(to: CGPoint(x: r.minX - sh, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX + sh, y: r.minY))
+        p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.minY + sh), control: CGPoint(x: r.maxX, y: r.minY))
         p.addLine(to: CGPoint(x: r.maxX, y: r.maxY - rad))
         p.addQuadCurve(to: CGPoint(x: r.maxX - rad, y: r.maxY), control: CGPoint(x: r.maxX, y: r.maxY))
         p.addLine(to: CGPoint(x: r.minX + rad, y: r.maxY))
         p.addQuadCurve(to: CGPoint(x: r.minX, y: r.maxY - rad), control: CGPoint(x: r.minX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.minY + sh))
+        p.addQuadCurve(to: CGPoint(x: r.minX - sh, y: r.minY), control: CGPoint(x: r.minX, y: r.minY))
         p.closeSubpath()
         return p
     }
@@ -131,19 +141,22 @@ struct RootView: View {
         let size = notch.visibleSize
         ZStack(alignment: .top) {
             ZStack {
-                if isTucked {
-                    NotchShape(radius: radius).fill(Color.black)
-                } else {
-                    NotchSurface(radius: radius, notchHeight: notch.notchSize.height)
-                }
-                if !isTucked {
-                    NotchShape(radius: radius)
-                        .stroke(dropTargeted ? Theme.glow[0] : Theme.hairline, lineWidth: dropTargeted ? 2 : 1)
-                }
+                NotchShape(radius: radius).fill(Color.black)
+                    .opacity(isTucked ? 1 : 0)
+                // Always mounted, cross-faded by opacity. Swapping views here made SwiftUI fade
+                // the open surface in (and out) at its *final* size, so the panel never grew out
+                // of the notch or shrank back into it — only the hidden black shape did.
+                NotchSurface(radius: radius, notchHeight: notch.notchSize.height)
+                    .opacity(isTucked ? 0 : 1)
+                NotchShape(radius: radius)
+                    .stroke(dropTargeted ? Theme.glow[0] : Theme.hairline, lineWidth: dropTargeted ? 2 : 1)
+                    .opacity(isTucked ? 0 : 1)
+                // Removed instantly: a fading glow would linger at the old size as a ghost frame.
                 if handsFree.isOn && !isTucked {
                     GlowBorder(radius: radius, intensity: handsFree.phase == .thinking ? 0.6 : handsFree.waveLevel * 1.6)
+                        .transition(.identity)
                 } else if backend.busy && notch.mode != .collapsed {
-                    GlowBorder(radius: radius)
+                    GlowBorder(radius: radius).transition(.identity)
                 }
             }
             .frame(width: size.width, height: size.height)
@@ -192,7 +205,7 @@ struct RootView: View {
                     .opacity(isOpen ? 1 : 0)
                     .animation(isOpen ? Motion.contentIn : Motion.contentOut, value: isOpen)
                     .allowsHitTesting(isOpen)
-                    .environment(\.notchContentVisible, isOpen && notch.contentLive)
+                    .environment(\.notchContentVisible, isOpen && notch.contentLive && !notch.onboarding)
                     .mask(alignment: .top) {
                         NotchShape(radius: radius).frame(width: size.width, height: size.height)
                     }
@@ -203,6 +216,18 @@ struct RootView: View {
         .animation(Motion.open, value: notch.hasLiveActivity)
         .animation(Motion.open, value: notch.showsPerch)
         .animation(Motion.open, value: notch.earWidth)
+        .overlay(alignment: .top) {
+            // More than one thing live: the extras ride in a small pill beside the notch.
+            let others = notch.mode == .collapsed && notch.hasLiveActivity ? notch.otherActivities : []
+            if !others.isEmpty {
+                let w = others.map(NotchController.pillItemWidth).reduce(0, +) + CGFloat(others.count - 1) * 4 + 16
+                SidePill(items: others, notch: notch, backend: backend, timers: hub.timers, handsFree: handsFree)
+                    .frame(width: w, height: notch.notchSize.height)
+                    .offset(x: size.width / 2 + 7 + w / 2)
+                    .transition(.scale(scale: 0.3, anchor: .leading).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.peek, value: notch.mode == .collapsed ? notch.otherActivities : [])
         .frame(width: notch.windowSize.width, height: notch.windowSize.height, alignment: .top)
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
@@ -300,11 +325,11 @@ struct AppMenu: View {
         Button("Camera mirror") { (NSApp.delegate as? AppDelegate)?.notch.openMirror() }
         Button("New chat") { backend.newChat() }
         Button(handsFree.isOn ? "End hands-free  ⌥⇧Space" : "Hands-free mode  ⌥⇧Space") { handsFree.toggle() }
-        Button((DesktopCompanion.enabled ? "✓ " : "   ") + "Desktop Ledge (wanders your screen)") {
+        Button((DesktopCompanion.enabled ? "✓ " : "   ") + "\(Prefs.name) on the desktop") {
             (NSApp.delegate as? AppDelegate)?.desktop.setEnabled(!DesktopCompanion.enabled)
         }
         Menu("Desktop avatar") {
-            ForEach([("ledge", "Ledge (hoodie)"), ("bee", "Bee"), ("cat", "Cat (hoodie + glasses)")], id: \.0) { id, label in
+            ForEach([("ledge", "Classic (hoodie)"), ("bee", "Bee"), ("cat", "Cat (hoodie + glasses)")], id: \.0) { id, label in
                 Button((DesktopCompanion.avatar == id ? "✓ " : "   ") + label) {
                     (NSApp.delegate as? AppDelegate)?.desktop.setAvatar(id)
                 }
@@ -328,7 +353,7 @@ struct AppMenu: View {
             Button("Brief me now") { hub.proactive.briefNow() }
             Button((hub.proactive.recapOn ? "✓ " : "   ") + "End-of-day wrap-up (\(hub.proactive.recapHour):00)") { hub.proactive.recapOn.toggle() }
             Button("Wrap up my day now") { hub.proactive.recapNow() }
-            Button("Share my week with Ledge") {
+            Button("Share my week with \(Prefs.name)") {
                 if let path = ValueLedger.shared.share() {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
                     backend.notice("Your week card is copied — paste it into a message or post.")
@@ -464,8 +489,8 @@ struct CollapsedView: View {
             let np = backend.nowPlaying
             return "Now playing \(np.track)" + (np.artist.isEmpty ? "" : " by \(np.artist)")
         case .agent:
-            return !backend.approvals.isEmpty ? "Ledge needs your approval" : backend.busy ? "Ledge is working"
-                : handsFree.isOn ? "Hands-free on" : "Ledge's answer is ready"
+            return !backend.approvals.isEmpty ? "\(Prefs.name) needs your approval" : backend.busy ? "\(Prefs.name) is working"
+                : handsFree.isOn ? "Hands-free on" : "\(Prefs.name)'s answer is ready"
         case .privacy:
             let p = notch.privacy
             return (p.micApps.isEmpty ? "" : "\(p.micApps.joined(separator: ", ")) is using the microphone. ")
@@ -474,7 +499,7 @@ struct CollapsedView: View {
             return "Keeping your Mac awake, " + HealthLogic.awakeLabel(until: KeepAwake.shared.until)
                 .replacingOccurrences(of: "∞", with: "until you stop it")
         case .none:
-            return "Ledge"
+            return Prefs.name
         }
     }
 
@@ -522,7 +547,7 @@ struct CollapsedView: View {
         case .hearing: return "Hearing…"
         case .thinking: return "Thinking"
         case .speaking: return "Speaking"
-        case .standby: return "“Ledge”"
+        case .standby: return "“\(Prefs.name)”"
         case .starting: return "Starting"
         case .off: return ""
         }
@@ -577,8 +602,6 @@ let quickActions: [QuickAction] = [
                 prompt: "Explain what's in my clipboard, then improve or fix it.", clipboard: true),
     QuickAction(icon: "arrowshape.turn.up.left", title: "Draft a reply",
                 prompt: "Draft a friendly, concise reply to the message in my clipboard. Match its language and tone.", clipboard: true),
-    QuickAction(icon: "lightbulb", title: "Brainstorm",
-                prompt: "Let's brainstorm. Ask me one short question about what I'm working on, then give me ideas."),
 ]
 
 struct ExpandedView: View {
@@ -662,6 +685,13 @@ struct ExpandedView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
         }
+        .overlay {
+            if notch.onboarding {
+                OnboardingView(notch: notch, backend: backend, hub: hub)
+                    .padding(.top, max(notch.notchSize.height, 32))
+                    .transition(.opacity)
+            }
+        }
         .onChange(of: isOpen) { open in if !open { notch.showPalette = false; notch.showHistory = false } }
         .onChange(of: notch.focusInput) { v in if v { focusSoon() } }
         .onChange(of: inputFocused) { v in if v { notch.pinned = true } }
@@ -728,7 +758,7 @@ struct ExpandedView: View {
                 notch.collapse()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { notch.openMirror() } },
             PaletteItem(id: "desk", group: .action, icon: "figure.wave",
-                        title: DesktopCompanion.enabled ? "Hide Desktop Ledge" : "Show Desktop Ledge", keywords: "avatar companion") {
+                        title: DesktopCompanion.enabled ? "Hide \(Prefs.name) from the desktop" : "Show \(Prefs.name) on the desktop", keywords: "avatar companion") {
                 app?.desktop.setEnabled(!DesktopCompanion.enabled) },
         ]
         if t.kind != nil {
@@ -808,7 +838,7 @@ struct ExpandedView: View {
             HStack(alignment: .bottom, spacing: 8) {
                 attachMenu
                 TextField(dictation.listening ? "Listening…" :
-                            backend.busy ? "Add to the running task…" : "Ask Ledge anything…",
+                            backend.busy ? "Add to the running task…" : "Ask \(Prefs.name) anything…",
                           text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13.5))
@@ -975,6 +1005,7 @@ struct Header: View {
     @ObservedObject var notch: NotchController
     @ObservedObject var handsFree: HandsFree
     @AppStorage("assistantName") private var assistantName = "Ledge"
+    @State private var menuHover = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -999,14 +1030,22 @@ struct Header: View {
                 iconButton(notch.pinned ? "pin.fill" : "pin", notch.pinned ? "Unpin (⌘P)" : "Keep open (⌘P)") {
                     notch.pinned.toggle()
                 }
+                // The label needs its own frame + content shape like the other header
+                // buttons: without them only the three dots' pixels took the click.
                 Menu { AppMenu(backend: backend) } label: {
                     Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.secondary)
+                        .foregroundStyle(menuHover ? .white : Theme.secondary)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(.white.opacity(menuHover ? 0.10 : 0)))
+                        .contentShape(Circle())
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .help("More")
+                .onHover { menuHover = $0 }
+                .animation(.easeOut(duration: 0.15), value: menuHover)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
@@ -1065,7 +1104,9 @@ struct Transcript: View {
                             .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Theme.secondary).frame(maxWidth: .infinity)
                     }
-                    ForEach(backend.items.suffix(shown)) { ItemRow(item: $0) }
+                    ForEach(StepGroup.segments(Array(backend.items.suffix(shown)), live: backend.busy)) { seg in
+                        if seg.items.count == 1 { ItemRow(item: seg.items[0]) } else { StepsRow(group: seg) }
+                    }
                     if backend.busy, !(backend.items.last?.streaming ?? false) {
                         WorkingRow(backend: backend, started: backend.turnStarted, tool: backend.lastTool)
                     }
@@ -1083,6 +1124,92 @@ struct Transcript: View {
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
+    }
+}
+
+/// A run of two or more tool/thinking rows between messages. Finished runs fold into
+/// one "5 steps" row (tap to see them); the run in progress stays open so you can watch.
+struct StepGroup: Identifiable {
+    let items: [Item]
+    let live: Bool
+    var id: String { items[0].id }
+
+    static func isStep(_ i: Item) -> Bool {
+        switch i.kind {
+        case .tool, .thinking: return true
+        default: return false
+        }
+    }
+
+    static func segments(_ items: [Item], live busy: Bool) -> [StepGroup] {
+        var out: [StepGroup] = []
+        var run: [Item] = []
+        func flush(trailing: Bool) {
+            guard !run.isEmpty else { return }
+            out.append(StepGroup(items: run, live: trailing && busy))
+            run = []
+        }
+        for i in items {
+            if isStep(i) { run.append(i) } else { flush(trailing: false); out.append(StepGroup(items: [i], live: false)) }
+        }
+        flush(trailing: true)
+        return out
+    }
+
+    var toolVerbs: [String] {
+        var seen = Set<String>(), out: [String] = []
+        for i in items { if case let .tool(_, _, verb, _, _) = i.kind, !verb.isEmpty, seen.insert(verb).inserted { out.append(verb) } }
+        return out
+    }
+    var failed: Int {
+        items.filter { if case let .tool(state, _, _, _, _) = $0.kind { return state == "error" } else { return false } }.count
+    }
+    var steps: Int {
+        items.filter { if case .tool = $0.kind { return true } else { return false } }.count
+    }
+}
+
+struct StepsRow: View {
+    let group: StepGroup
+    @State private var open = false
+
+    var body: some View {
+        if group.live {
+            VStack(alignment: .leading, spacing: 10) { ForEach(group.items) { ItemRow(item: $0) } }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Button { withAnimation(.spring(duration: 0.25)) { open.toggle() } } label: { summary }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(open ? "Hide the steps" : "Show the steps")
+                if open {
+                    VStack(alignment: .leading, spacing: 8) { ForEach(group.items) { ItemRow(item: $0) } }
+                        .padding(.leading, 10)
+                        .overlay(alignment: .leading) { Rectangle().fill(Theme.hairline).frame(width: 1) }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+    }
+
+    private var summary: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "sparkles").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.glow[0])
+                .frame(width: 16)
+            Text(group.steps == 0 ? "Thought it through" : "\(group.steps) step\(group.steps == 1 ? "" : "s")")
+                .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white.opacity(0.75))
+            if group.failed > 0 {
+                Text("\(group.failed) failed").font(.system(size: 11, weight: .medium)).foregroundStyle(.red.opacity(0.85))
+            }
+            Text(group.toolVerbs.joined(separator: " · "))
+                .font(.system(size: 11)).foregroundStyle(Theme.tertiary)
+                .lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                .foregroundStyle(Theme.tertiary).rotationEffect(.degrees(open ? 90 : 0))
+        }
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
+        .contentShape(Rectangle())
     }
 }
 
@@ -1314,7 +1441,7 @@ struct ApprovalCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
                 Image(systemName: "hand.raised.fill").foregroundStyle(.yellow)
-                Text("Ledge wants to run").foregroundStyle(Theme.secondary)
+                Text("\(Prefs.name) wants to run").foregroundStyle(Theme.secondary)
                 Text(approval.tool).foregroundStyle(.white).fontWeight(.bold)
             }
             .font(.system(size: 12))
@@ -1428,7 +1555,7 @@ struct HandsFreeStage: View {
         case .hearing: return "Go on…"
         case .thinking: return backend.lastTool.isEmpty ? "Thinking…" : backend.lastTool + "…"
         case .speaking: return "Speaking"
-        case .standby: return "Say “Ledge” when you need me"
+        case .standby: return "Say “\(Prefs.name)” when you need me"
         case .starting: return "Getting ready…"
         case .off: return ""
         }
@@ -1493,10 +1620,19 @@ struct HandsFreeSwitch: View {
 struct HeroAvatar: View {
     @ObservedObject var proactive: ProactiveEngine
     @ObservedObject var backend: Backend
+    @Environment(\.notchContentVisible) private var visible
+    @AppStorage("character.style") private var style = "puff"
     var body: some View {
-        AssistantFace(size: proactive.proposals.isEmpty ? 86 : 60, backend: backend)
-            .padding(.top, 6)
-            .animation(.spring(duration: 0.35, bounce: 0.1), value: proactive.proposals.isEmpty)
+        if style == "puff" {
+            // Puff drops in with a mini superhero landing and settles here.
+            HeroStage(visible: visible)
+                .frame(width: 320, height: proactive.proposals.isEmpty ? 118 : 96)
+                .padding(.top, 2)
+        } else {
+            AssistantFace(size: proactive.proposals.isEmpty ? 86 : 60, backend: backend)
+                .padding(.top, 6)
+                .animation(.spring(duration: 0.35, bounce: 0.1), value: proactive.proposals.isEmpty)
+        }
     }
 }
 

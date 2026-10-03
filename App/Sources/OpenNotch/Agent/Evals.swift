@@ -25,6 +25,7 @@ struct EvalCase: Sendable {
         EvalCase(name: "web", prompt: "Who won the most recent Formula 1 race?", any: ["web_search", "fetch_url"]),
         EvalCase(name: "mail-unread", prompt: "Anything unread in my email that needs me?", all: ["mail_recent"]),
         EvalCase(name: "mail-draft", prompt: "Draft an email to sam@example.com saying I'll be 10 minutes late to our 3pm", all: ["mail_draft"]),
+        EvalCase(name: "mail-send", prompt: "Send an email to sam@example.com saying I'll be 10 minutes late to our 3pm", all: ["mail_send"]),
         EvalCase(name: "schedule", prompt: "Every weekday at 9am give me a short tech news brief", all: ["schedule_task"]),
         EvalCase(name: "disk", prompt: "How much free disk space do I have?", any: ["system_info", "run_command"]),
         EvalCase(name: "event", prompt: "Put lunch with Priya on my calendar tomorrow at 1pm", all: ["create_event"]),
@@ -58,7 +59,7 @@ struct EvalCase: Sendable {
 enum Evals {
     /// Tools that change something outside the conversation: pretend in evals.
     static let pretend: Set<String> = ["remember", "forget", "timer", "keep_awake", "open", "media_control",
-                                       "clipboard", "notes", "screenshot"]
+                                       "clipboard", "notes", "screenshot", "mail_send", "mail_draft"]
 
     static func run() async -> Int32 {
         let args = CommandLine.arguments

@@ -74,6 +74,12 @@ enum MediaControl {
         let (ok, out) = osa("tell application \"\(p)\" to \(verb)")
         guard ok else { return fail(out) }
         var res: [String: Any] = ["success": true, "app": p, "action": a]
+        // "Play" can succeed and still play nothing (a Music app with no songs, no
+        // Spotify). Check before claiming it, and offer something that works.
+        if verb == "play" {
+            Thread.sleep(forTimeInterval: 0.8)
+            if (nowPlaying()["state"] as? String) != "playing" { return nothingToPlay(p) }
+        }
         if verb != "pause" {
             let np = nowPlaying()
             if let t = np["track"] as? String, !t.isEmpty { res["track"] = t; res["artist"] = np["artist"] }
@@ -103,6 +109,20 @@ enum MediaControl {
         }
         if let url = URL(string: "https://music.youtube.com/search?q=" + enc) { NSWorkspace.shared.open(url) }
         return ["success": true, "app": "YouTube Music", "opened_search": q]
+    }
+
+    /// Pressed play and nothing started. An empty Music library is the usual reason on
+    /// a Mac without Spotify, so open YouTube Music in the browser instead of pretending.
+    private static func nothingToPlay(_ player: String) -> [String: Any] {
+        if player == "Music" {
+            let (ok, out) = osa("tell application \"Music\" to count of tracks of library playlist 1")
+            if ok, Int(out.trimmingCharacters(in: .whitespaces)) == 0 {
+                if let url = URL(string: "https://music.youtube.com") { NSWorkspace.shared.open(url) }
+                return ["success": true, "app": "YouTube Music",
+                        "say": "Your Music library has no songs, so I opened YouTube Music in your browser. Tell me an artist or song and I'll search for it."]
+            }
+        }
+        return fail("\(player) didn't start playing — open \(player) and pick something, or tell me a song or artist.")
     }
 
     // MARK: helpers
@@ -190,6 +210,16 @@ enum MediaIntent {
         let name = NSRegularExpression.escapedPattern(for: assistantName.lowercased())
         t = t.replacingOccurrences(of: "^(?:hey |ok |okay )?\(name)[, ]+", with: "", options: .regularExpression)
         guard !t.isEmpty, t.split(separator: " ").count <= 10 else { return nil }
+        // Trailing filler and the player's name aren't part of what to play:
+        // "play some music for me on the music app" → "play some music".
+        // Keeps at least two words, so "turn on music" stays whole.
+        for _ in 0..<3 {
+            for rx in [#"\s+(?:for me|please|now|right now)$"#,
+                       #"\s+(?:on|in|using|from)\s+(?:the\s+|my\s+)?(?:spotify|apple music|itunes|music)(?:\s+app)?$"#] {
+                let s = t.replacingOccurrences(of: rx, with: "", options: .regularExpression)
+                if s.split(separator: " ").count >= 2 { t = s }
+            }
+        }
         for (rx, action) in fast where t.range(of: rx, options: .regularExpression) != nil {
             return Command(action: action)
         }
@@ -218,6 +248,7 @@ enum MediaIntent {
         guard res["success"] as? Bool == true else {
             return "Couldn't do that — \(res["error"] as? String ?? "unknown error")."
         }
+        if let say = res["say"] as? String { return say }
         let app = res["app"] as? String ?? "the player"
         let now = [res["track"] as? String, res["artist"] as? String].compactMap { $0 }.filter { !$0.isEmpty }
             .joined(separator: " — ")

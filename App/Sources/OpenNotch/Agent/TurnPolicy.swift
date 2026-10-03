@@ -81,6 +81,8 @@ enum TurnPolicy {
                     "bash", "sh", "zsh", "python", "python3", "node", "ruby", "perl", "xargs", "find"].contains(program)
             else { return nil }
             return "run_command:" + program
+        case "mail_send":
+            return nil                      // every email is approved on its own
         case "write_file", "edit_file":
             guard let p = args["path"] as? String, !p.isEmpty else { return nil }
             let dir = (PathPolicy.resolve(p) as NSString).deletingLastPathComponent

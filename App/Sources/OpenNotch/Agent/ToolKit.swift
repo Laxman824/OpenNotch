@@ -590,7 +590,10 @@ enum ToolKit {
             description: "List calendar events from today for the next N days (default 1, max 14).",
             schema: Schema.object(["days": Schema.integer("How many days, starting today")]),
             risk: .read, verb: "Checking the calendar", detail: { "\($0.int("days") ?? 1) day(s)" }, preview: { _ in "" },
-            run: { a in calendarEvents(days: min(14, max(1, a.int("days") ?? 1))) }),
+            run: { a in
+                if let no = await ensureAccess(.event) { return .fail(no) }
+                return calendarEvents(days: min(14, max(1, a.int("days") ?? 1)))
+            }),
         AgentTool(
             name: "create_event",
             description: "Add a calendar event. Times as ISO 8601 local time, e.g. 2026-10-02T15:00.",
@@ -598,17 +601,42 @@ enum ToolKit {
                                    "end": Schema.string("End (optional, default 1 hour later)"),
                                    "notes": Schema.string("Notes (optional)")], required: ["title", "start"]),
             risk: .confirm, verb: "Adding an event", detail: { $0.str("title") ?? "" },
-            preview: { "“\($0.str("title") ?? "")” at \($0.str("start") ?? "?")" }, run: { a in createEvent(a) }),
+            preview: { "“\($0.str("title") ?? "")” at \($0.str("start") ?? "?")" }, run: { a in
+                if let no = await ensureAccess(.event) { return .fail(no) }
+                return createEvent(a)
+            }),
         AgentTool(
             name: "create_reminder",
             description: "Add a reminder, optionally due at an ISO 8601 local time.",
             schema: Schema.object(["title": Schema.string("What to remember"), "due": Schema.string("Due (optional, ISO 8601)")],
                                   required: ["title"]),
             risk: .confirm, verb: "Adding a reminder", detail: { $0.str("title") ?? "" },
-            preview: { "“\($0.str("title") ?? "")”" + ($0.str("due").map { " due \($0)" } ?? "") }, run: { a in createReminder(a) }),
+            preview: { "“\($0.str("title") ?? "")”" + ($0.str("due").map { " due \($0)" } ?? "") }, run: { a in
+                if let no = await ensureAccess(.reminder) { return .fail(no) }
+                return createReminder(a)
+            }),
     ]
 
     static let eventStore = EKEventStore()
+    /// Set while tools run for a background job (morning brief, wrap-up): no permission dialogs then.
+    @TaskLocal static var background = false
+
+    /// Asks for Calendars/Reminders the first time a tool needs them (the notch steps
+    /// aside for the dialog). Nil = allowed; otherwise why not, to return as a failure.
+    static func ensureAccess(_ type: EKEntityType) async -> String? {
+        let what = type == .event ? "Calendar" : "Reminders"
+        switch EKEventStore.authorizationStatus(for: type) {
+        case .fullAccess: return nil
+        case .notDetermined where background:
+            return "\(what) access hasn't been granted yet."      // never pop a dialog nobody asked for
+        case .notDetermined:
+            await MainActor.run { ToolHost.notch?.yieldForSystemPrompt(what == "Calendar" ? "Calendars" : "Reminders") }
+            let ok = (try? await (type == .event ? eventStore.requestFullAccessToEvents() : eventStore.requestFullAccessToReminders())) ?? false
+            return ok ? nil : "\(what) access was declined."
+        default:
+            return "\(what) access isn't allowed — turn it on in Settings › Permissions."
+        }
+    }
 
     static func parseDate(_ s: String?) -> Date? {
         guard let s else { return nil }

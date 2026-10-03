@@ -17,8 +17,8 @@ enum ToolRouter {
     static let groups: [Group] = [
         Group(name: "files", pattern: #"\b(edit|write|create|change|fix|rename|refactor|update|append|grep|bug|search (the|my) (code|files?)|in the file|save (it|to)|attached files)\b"#,
               tools: ["write_file", "edit_file", "search_text"]),
-        Group(name: "mail", pattern: #"\b(e-?mails?|inbox|mail|reply|replies|unread|gmail|outlook|draft)\b"#,
-              tools: ["mail_recent", "mail_read", "mail_draft", "contacts_find"]),
+        Group(name: "mail", pattern: #"\b(e-?mails?|inbox|mail|reply|replies|unread|gmail|outlook|draft|send it)\b"#,
+              tools: ["mail_recent", "mail_read", "mail_draft", "mail_send", "contacts_find"]),
         Group(name: "calendar", pattern: #"\b(calendar|meetings?|events?|agenda|schedule|today|tomorrow|this week|plan my day|remind(er)?s?|due)\b"#,
               tools: ["calendar_events", "create_event", "reminders_list", "create_reminder"]),
         Group(name: "notes_app", pattern: #"\b(apple notes?|notes app|my notes|an? note|note (about|on|for|called))\b"#,

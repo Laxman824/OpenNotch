@@ -103,7 +103,7 @@ struct CommandPalette: View {
         }
         if !query.trimmingCharacters(in: .whitespaces).isEmpty {
             let q = query
-            list.append(PaletteItem(id: "ask", group: .ask, icon: "sparkles", title: "Ask Ledge: “\(q)”") { onAsk(q) })
+            list.append(PaletteItem(id: "ask", group: .ask, icon: "sparkles", title: "Ask \(Prefs.name): “\(q)”") { onAsk(q) })
         }
         return list
     }

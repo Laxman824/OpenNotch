@@ -210,7 +210,7 @@ final class ProactiveEngine: ObservableObject {
         }
         let done = ValueLedger.shared.counts()
         let lines = ValueLogic.highlights(done)
-        if !lines.isEmpty { parts.append("What you (Ledge) did for me this week so far: " + lines.joined(separator: "; ") + ".") }
+        if !lines.isEmpty { parts.append("What you (\(Prefs.name)) did for me this week so far: " + lines.joined(separator: "; ") + ".") }
         parts.append("Check my reminders (reminders_list) for what's still open or overdue, and tomorrow's first events "
                      + "(calendar_events). Then write, in under 120 words: 1) what I spent the day on, 2) what's left, "
                      + "3) the first thing tomorrow, 4) one kind, practical suggestion. Warm, short, no headings. "
@@ -235,7 +235,7 @@ final class ProactiveEngine: ObservableObject {
         let counts = ValueLedger.shared.counts(week: week)
         let minutes = ValueLogic.minutes(counts)
         guard minutes >= 10 else { return }
-        add(Proposal(id: id, kind: .week, title: "Your week with Ledge: \(ValueLogic.saved(minutes)) saved",
+        add(Proposal(id: id, kind: .week, title: "Your week with \(Prefs.name): \(ValueLogic.saved(minutes)) saved",
                      detail: ValueLogic.highlights(counts).prefix(2).joined(separator: " · ").capitalizedFirst,
                      actionLabel: "Share", prompt: nil, url: nil, body: week,
                      expires: now.addingTimeInterval(3 * 24 * 3600)), present: true)

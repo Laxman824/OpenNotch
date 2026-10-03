@@ -19,7 +19,7 @@ struct Item: Identifiable, Equatable {
     var kind: Kind
     var text: String
     var streaming = false
-    var meta: String? = nil          // "3.2s · 4 tools · 1.2k tokens" under an answer
+    var meta: String? = nil          // "3.2s" under an answer
     var details: String? = nil       // tool rows: what was sent / what came back
     var started: Date? = nil         // thinking rows: when it began
 }
@@ -461,6 +461,8 @@ final class Backend: ObservableObject {
                 add(.assistant, delta, streaming: true)
             }
         case "tool":
+            // Loading more tools is plumbing, not a step the user cares about.
+            if ev["name"] as? String == "more_tools" { break }
             let id = ev["id"] as? String ?? UUID().uuidString
             let state = ev["state"] as? String ?? "running"
             let verb = ev["verb"] as? String ?? ""
@@ -558,12 +560,7 @@ final class Backend: ObservableObject {
     private static func stats(_ ev: [String: Any]) -> String {
         var parts: [String] = []
         if let ms = ev["ms"] as? Int { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
-        if let n = ev["toolCalls"] as? Int, n > 0 { parts.append("\(n) tool\(n == 1 ? "" : "s")") }
-        let tin = ev["inTokens"] as? Int ?? 0, tout = ev["outTokens"] as? Int ?? 0
-        if tin + tout > 0 {
-            let k = Double(tin + tout)
-            parts.append(k >= 1000 ? String(format: "%.1fk tokens", k / 1000) : "\(tin + tout) tokens")
-        }
+        // Steps are shown by the steps row above; token counts live in the AI usage tab.
         return parts.joined(separator: " · ")
     }
 

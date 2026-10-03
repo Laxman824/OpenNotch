@@ -56,7 +56,7 @@ free models in two clicks — no card.
 
 | | |
 |---|---|
-| <img src="docs/images/approval.jpg" alt="NEEDS YOUR OK — the notch glows yellow; Bee points at it" width="100%"> | Commands, file changes, calendar edits, drafts and connector tools wait for you. The notch glows yellow and chimes; in hands-free mode it asks out loud — say "yes" or "no". No answer in five minutes means no. For repeated steps, **Allow for this chat** covers one program (say, `git`) or one project folder until you switch chats. **It drafts email; it never sends.** Text from web pages and emails is handed to the AI as information, never as instructions. |
+| <img src="docs/images/approval.jpg" alt="NEEDS YOUR OK — the notch glows yellow; Bee points at it" width="100%"> | Commands, file changes, calendar edits, drafts and connector tools wait for you. The notch glows yellow and chimes; in hands-free mode it asks out loud — say "yes" or "no". No answer in five minutes means no. For repeated steps, **Allow for this chat** covers one program (say, `git`) or one project folder until you switch chats. **It drafts email, and sends only after you approve that exact email.** Text from web pages and emails is handed to the AI as information, never as instructions. |
 | <img src="docs/images/voice.jpg" alt="Hands-free: Hey Ledge, what's on my calendar?" width="100%"> | **Hands-free voice.** Say "Hey Ledge…", hear the answer, interrupt any time. Speech recognition runs on your Mac. |
 | <img src="docs/images/proactive.jpg" alt="Proactive: Design review in 10 min — Join" width="100%"> | **Proactive, never pushy.** A morning brief, "meeting in 10 minutes — Join", "3 emails may need a reply — Draft replies". Proposals never act on their own. |
 

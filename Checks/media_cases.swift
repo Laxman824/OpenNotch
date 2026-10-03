@@ -10,11 +10,16 @@ let yes: [(String, C)] = [
     ("Hey Ledge, pause the music.", C(action: "pause")), ("next song", C(action: "next")), ("skip", C(action: "next")),
     ("previous track", C(action: "previous")), ("what's playing?", C(action: "now_playing")),
     ("volume 40", C(action: "volume", level: 40)), ("play arijit singh", C(action: "play_query", query: "arijit singh")),
+    // Seen live: this became a Spotify search for "some music for me on music app".
+    ("Play some music for me on music app", C(action: "play")), ("play music on spotify please", C(action: "play")),
+    ("play arijit singh on spotify", C(action: "play_query", query: "arijit singh")),
+    ("play lofi beats for me", C(action: "play_query", query: "lofi beats")),
 ]
 for (t, c) in yes { check(t, MediaIntent.parse(t), c) }
 for t in ["play around with the parser", "play with the new API and tell me what breaks", "run the tests",
           "explain how the Spotify web API works", "stop the dev server and restart it with the new flags please",
-          "play the video file in downloads", ""] {
+          "play the video file in downloads", "play around with the music app settings for me",
+          "play with the spotify api in the music app", "now", ""] {
     check("agent: \(t)", MediaIntent.parse(t), nil)
 }
 check("custom name", MediaIntent.parse("ok nova, next song", assistantName: "Nova"), C(action: "next"))

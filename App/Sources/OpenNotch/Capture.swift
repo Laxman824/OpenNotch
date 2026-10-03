@@ -354,7 +354,7 @@ struct CapturesView: View {
         .onDrag { NSItemProvider(contentsOf: URL(fileURLWithPath: c.path)) ?? NSItemProvider() }
         .contextMenu {
             Button("Edit") { store.editing = c }
-            Button("Ask Ledge about this") { ask(c) }
+            Button("Ask \(Prefs.name) about this") { ask(c) }
             Button("Copy image") { if let i = NSImage(contentsOfFile: c.path) { NSPasteboard.general.clearContents(); NSPasteboard.general.writeObjects([i]) } }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: c.path)]) }
             Divider()
@@ -438,7 +438,7 @@ struct CaptureEditor: View {
                 Spacer()
                 Button("Copy") { if let i = image { NSPasteboard.general.clearContents(); NSPasteboard.general.writeObjects([i]) } }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.secondary)
-                Button("Ask Ledge") {
+                Button("Ask \(Prefs.name)") {
                     if let img = image, let n = store.replace(capture, with: img) {
                         backend.attach(Attachment(kind: .screenshot, value: n.path))
                         backend.send(capture.transcript.map { "I annotated this and said: “\($0)”. Help me with it." }
