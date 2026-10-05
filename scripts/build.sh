@@ -45,6 +45,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>dev.opennotch.routine</string>
+    <key>CFBundleURLSchemes</key><array><string>opennotch</string></array>
+  </dict></array>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT licensed · github.com/Laxman824/OpenNotch</string>
   <key>NSCameraUsageDescription</key><string>OpenNotch shows a camera mirror in the notch so you can check yourself before a call. Nothing is recorded.</string>
@@ -103,6 +107,8 @@ for arg in "$@"; do
                fi
                rm -rf "$DEST"; mkdir -p "$(dirname "$DEST")"
                cp -R "$APP" "$DEST"; APP="$DEST"
+               # Register the installed copy so opennotch:// links (exported routine Shortcuts) open it.
+               /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
                echo "Installed to $APP" ;;
     --open)    if [ -f "$AGENT" ]; then
                  if [ -n "${REBOOTSTRAP:-}" ]; then launchctl bootstrap "gui/$(id -u)" "$AGENT"; REBOOTSTRAP=

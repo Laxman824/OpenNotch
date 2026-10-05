@@ -122,3 +122,123 @@ enum EarsSheet {
         return 0
     }
 }
+
+/// `OpenNotch --render-looks out.png` — every body shape with every accessory, jelly and plush.
+@MainActor
+enum LookSheet {
+    static func render(to path: String) -> Int32 {
+        let palettes = ["ocean", "mint", "ember", "aurora", "custom:B79CFF-7E5BEF-FFE7A8", "stark"]
+        let t = 1000.3
+        func cell(_ look: PuffLook, _ pal: String, _ size: CGFloat, mood: AvatarMood = .idle) -> some View {
+            PuffCanvas(size: size, mood: mood, palette: AvatarPalette.named(pal), t: t, gaze: CGPoint(x: 0.2, y: 0.1),
+                       limbs: PuffLimbs(), outfit: look)
+                .frame(width: size, height: size)
+                .clipped()                                     // exactly what a cached sprite keeps
+        }
+        let sheet = VStack(alignment: .leading, spacing: 14) {
+            Text("Puff — shapes × extras (top: jelly, bottom: plush)").font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
+            HStack(spacing: 4) {
+                Text("").frame(width: 60)
+                ForEach(PuffAccessory.allCases) { a in
+                    Text(a.name).font(.system(size: 10)).foregroundStyle(.white.opacity(0.6)).frame(width: 78)
+                }
+            }
+            ForEach(Array(PuffShape.allCases.enumerated()), id: \.offset) { i, sh in
+                VStack(spacing: 2) {
+                    ForEach(PuffFinish.allCases) { f in
+                        HStack(spacing: 4) {
+                            Text(f == .jelly ? sh.name : "").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.75))
+                                .frame(width: 60, alignment: .leading)
+                            ForEach(PuffAccessory.allCases) { a in
+                                cell(PuffLook(shape: sh, accessory: a, finish: f), palettes[i % palettes.count], 78)
+                            }
+                        }
+                    }
+                }
+            }
+            Text("The cast").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+            let cast: [(PuffShape, PuffAccessory, PuffFinish, String)] = [
+                (.blob, .sprout, .jelly, "aurora"), (.bunny, .none, .plush, "custom:F4E9FF-C9B6F2-8FD3FF"),
+                (.bear, .headphones, .plush, "custom:C98B5A-8E5634-FFD9A0"), (.kitty, .bow, .jelly, "ember"),
+                (.dino, .none, .plush, "mint"), (.ghost, .none, .jelly, "custom:F2F4FF-B9C2F0-8FE3FF"),
+                (.mushroom, .none, .jelly, "stark"), (.star, .scarf, .plush, "custom:B79CFF-7E5BEF-FFE7A8"),
+                (.cloud, .none, .plush, "custom:FFFFFF-CFE0F5-7FC8FF"), (.owl, .glasses, .plush, "custom:B78A63-7A5638-FFE08A"),
+            ]
+            HStack(spacing: 8) {
+                ForEach(Array(cast.enumerated()), id: \.offset) { _, c in
+                    VStack(spacing: 4) {
+                        cell(PuffLook(shape: c.0, accessory: c.1, finish: c.2), c.3, 130, mood: .idle)
+                        Text(c.0.name).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.7))
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                ForEach(Array(cast.enumerated()), id: \.offset) { _, c in
+                    cell(PuffLook(shape: c.0, accessory: c.1, finish: c.2), c.3, 130, mood: .happy)
+                }
+            }
+        }
+        .padding(24)
+        .background(Color(white: 0.08))
+        let r = ImageRenderer(content: sheet)
+        r.scale = 2
+        guard let img = r.cgImage, let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil)
+        else { return 1 }
+        CGImageDestinationAddImage(dest, img, nil)
+        return CGImageDestinationFinalize(dest) ? 0 : 1
+    }
+}
+
+/// `OpenNotch --render-connectors out.png` — the connector gallery's logo tiles.
+@MainActor
+enum ConnectorSheet {
+    static func render(to path: String) -> Int32 {
+        let sheet = HStack(spacing: 14) {
+            ForEach(ConnectorCatalog.all) { c in
+                VStack(spacing: 6) {
+                    ConnectorLogo.Tile(id: c.id, name: c.name, fallback: c.color, size: 44)
+                    Text(c.name).font(.system(size: 11)).foregroundStyle(.white.opacity(0.75))
+                }
+            }
+        }
+        .padding(20)
+        .background(Color(white: 0.1))
+        let r = ImageRenderer(content: sheet)
+        r.scale = 2
+        guard let img = r.cgImage, let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil)
+        else { return 1 }
+        CGImageDestinationAddImage(dest, img, nil)
+        return CGImageDestinationFinalize(dest) ? 0 : 1
+    }
+}
+
+/// `OpenNotch --render-extras out.png` — every extra, large, on a few characters (jelly and plush).
+@MainActor
+enum ExtrasSheet {
+    static func render(to path: String) -> Int32 {
+        let hosts: [(PuffShape, PuffFinish, String)] = [(.blob, .jelly, "ocean"), (.bear, .plush, "custom:C98B5A-8E5634-FFD9A0"),
+                                                         (.kitty, .jelly, "custom:B79CFF-7E5BEF-FFE7A8")]
+        let sheet = VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(hosts.enumerated()), id: \.offset) { _, h in
+                HStack(spacing: 6) {
+                    ForEach(PuffAccessory.allCases.filter { $0 != .none }) { a in
+                        VStack(spacing: 2) {
+                            PuffCanvas(size: 150, mood: .idle, palette: AvatarPalette.named(h.2), t: 1000.3, gaze: CGPoint(x: 0.15, y: 0.1),
+                                       limbs: PuffLimbs(), outfit: PuffLook(shape: h.0, accessory: a, finish: h.1))
+                                .frame(width: 150, height: 150).clipped()
+                            Text(a.name).font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .background(Color(white: 0.09))
+        let r = ImageRenderer(content: sheet)
+        r.scale = 2
+        guard let img = r.cgImage, let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil)
+        else { return 1 }
+        CGImageDestinationAddImage(dest, img, nil)
+        return CGImageDestinationFinalize(dest) ? 0 : 1
+    }
+}

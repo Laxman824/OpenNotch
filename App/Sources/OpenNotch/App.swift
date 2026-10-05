@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var scheduleTimer: Timer?
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        FrontApp.startTracking()                 // screen_text reads the app you were in, not the notch
         // ── Resilience: run under the launchd supervisor, one copy only ──
         if !Supervisor.disabled && Supervisor.canSupervise && !Supervisor.isSupervised && Supervisor.writePlist() {
             if Supervisor.isDuplicateInstance() {
@@ -356,6 +357,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// opennotch://routine/<id>?key=… — an exported Shortcut runs a routine. Only the routine's own secret works,
+    /// so a web page can't trigger routines; it runs like typing its name (normal approvals).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let (id, key) = RoutineLogic.parse(url) else { continue }
+            guard let r = RoutineStore.shared.all().first(where: { $0.id == id }), RoutineLogic.keyMatches(key, r.key) else {
+                AppLog.write("routine link refused: unknown routine or wrong key")
+                continue
+            }
+            runRoutine(r)
+        }
+    }
+
+    /// Opens the chat and runs a routine as if its name were typed.
+    func runRoutine(_ r: Routine) {
+        hub.module = .chat
+        notch.expand(pinned: true)
+        backend.send(r.name)
+    }
+
     private func reportCrashes(after delay: Double) {
         guard let c = Supervisor.collectCrashes().first else { return }
         AppLog.write("recovered from crash: \(c.exception) | \(c.frame) | \(c.saved)")
@@ -450,6 +471,18 @@ struct OpenNotchMain {
             let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "character.png"
             exit(MainActor.assumeIsolated { CharacterSheet.render(to: out) })
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-connectors") {
+            let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "connectors.png"
+            exit(MainActor.assumeIsolated { ConnectorSheet.render(to: out) })
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-extras") {
+            let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "extras.png"
+            exit(MainActor.assumeIsolated { ExtrasSheet.render(to: out) })
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-looks") {
+            let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "looks.png"
+            exit(MainActor.assumeIsolated { LookSheet.render(to: out) })
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--render-ears") {
             let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "ears.png"
             exit(MainActor.assumeIsolated { EarsSheet.render(to: out) })
@@ -496,6 +529,80 @@ struct OpenNotchMain {
                 print("watching:", Attention.mediaApp() ?? "nothing", "· full screen in front:", Presence.frontmostIsFullScreen())
             }
             exit(0)
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--probe-search") {   // dev: one web search via Parallel, then web_search
+            let q = CommandLine.arguments.dropFirst(i + 1).first ?? "latest Swift release"
+            Task {
+                switch await ParallelSearch.shared.search(q, objective: nil) {
+                case .success(let rows): print("Parallel: \(rows.count) results\n" + ToolKit.searchText(rows).prefix(1500))
+                case .failure(let e): print("Parallel failed: \(e.localizedDescription)")
+                }
+                let out = await ToolKit.webSearch(ToolArgs(json: String(data: HTTP.json(["query": q]), encoding: .utf8) ?? "{}"))
+                print("\nweb_search ok=\(out.ok), \(out.text.count) chars")
+                exit(out.ok ? 0 : 1)
+            }
+            RunLoop.main.run()
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--probe-oauth") {    // dev: sign-in discovery only (registers nothing)
+            let raw = CommandLine.arguments.dropFirst(i + 1).first ?? "https://mcp.notion.com/mcp"
+            Task {
+                guard let url = URL(string: raw) else { print("bad url"); exit(1) }
+                do {
+                    if let a = try await MCPAuth.discover(server: url) {
+                        print("sign-in needed\n  authorize: \(a.authorizationEndpoint)\n  token: \(a.tokenEndpoint)")
+                        print("  register: \(a.registrationEndpoint?.absoluteString ?? "— (not supported: can't connect)")")
+                        print("  client auth: \(MCPAuthLogic.authMethod(supported: a.authMethods)) · resource: \(a.resource) · scope: \(a.scope ?? "—")")
+                    } else {
+                        print("no sign-in needed")
+                    }
+                    exit(0)
+                } catch {
+                    print("failed:", error.localizedDescription)
+                    exit(1)
+                }
+            }
+            RunLoop.main.run()
+        }
+        if CommandLine.arguments.contains("--probe-shortcut-sign") {       // dev: build + sign a routine shortcut, don't open it
+            let r = Routine(id: "probe", name: "OpenNotch probe", steps: "x", key: RoutineLogic.newKey(), created: Date())
+            let dir = NSTemporaryDirectory()
+            let raw = dir + "probe-unsigned.shortcut", out = dir + "probe-signed.shortcut"
+            guard let url = RoutineLogic.url(for: r),
+                  let d = try? PropertyListSerialization.data(fromPropertyList: RoutineLogic.shortcutPlist(url: url), format: .binary, options: 0),
+                  (try? d.write(to: URL(fileURLWithPath: raw))) != nil else { print("couldn't write"); exit(1) }
+            let res = Proc.run("/usr/bin/shortcuts", ["sign", "--mode", "anyone", "--input", raw, "--output", out], timeout: 60)
+            print("sign status \(res.status) \(res.err.prefix(300)) exists=\(FileManager.default.fileExists(atPath: out))")
+            exit(res.status == 0 ? 0 : 1)
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--probe-tool") {     // dev: run one READ-ONLY tool with JSON args
+            let args = Array(CommandLine.arguments.dropFirst(i + 1))
+            Task { @MainActor in
+                FrontApp.startTracking()
+                let all = ToolKit.all() + DailyTools.all() + MacTools.all()
+                guard let name = args.first, let tool = all.first(where: { $0.name == name }), tool.risk == .read else {
+                    print("give a read-only tool name"); exit(2)
+                }
+                let out = await tool.run(ToolArgs(json: args.count > 1 ? args[1] : "{}"))
+                print("ok=\(out.ok)\n" + String(out.text.prefix(2500)))
+                exit(out.ok ? 0 : 1)
+            }
+            RunLoop.main.run()
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--probe-mcp") {      // dev: connect to an MCP server URL, list its tools
+            let url = CommandLine.arguments.dropFirst(i + 1).first ?? ParallelSearch.endpoint.absoluteString
+            Task {
+                let server = MCPServer(name: "probe", config: ["url": url])
+                do {
+                    let tools = try await server.start()
+                    print("\(tools.count) tools:", tools.map(\.name).joined(separator: ", "))
+                    server.stop()
+                    exit(0)
+                } catch {
+                    print("failed:", error.localizedDescription)
+                    exit(1)
+                }
+            }
+            RunLoop.main.run()
         }
         if CommandLine.arguments.contains("--checks") {
             Task { @MainActor in exit(await AgentChecks.run()) }

@@ -21,7 +21,8 @@ listens hands-free, and brings a few friends. Free, local-first, and your data s
 
 Hover the notch (or press **⌥Space**) and ask anything. Music, timers, clipboard, notes, calendar,
 captures and a dozen more tools live there too, Dynamic-Island style. Everything runs on your Mac:
-chats are stored locally, and the only network traffic goes to the AI you choose.
+chats are stored locally, and network traffic goes only to the AI you choose (plus web searches, weather
+and pages it fetches when asked).
 
 > **Status: early (0.1).** Works today: the notch, modules, pop-ups, the desktop companion, and the
 > AI agent with tools. See [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
@@ -30,8 +31,8 @@ chats are stored locally, and the only network traffic goes to the AI you choose
 
 <img src="docs/images/assistant.jpg" alt="The assistant thinking, following a plan and calling calendar, reminders and weather tools" width="100%">
 
-It **summarises the page you're reading**, **catches up on your Mail inbox and drafts replies** (it never
-sends), searches and creates **Apple Notes**, looks up **contacts**, plans your day from your **calendar,
+It **summarises the page you're reading**, **catches up on your Mail inbox and drafts replies** (it sends
+only an email you approve), searches and creates **Apple Notes**, looks up **contacts**, plans your day from your **calendar,
 reminders and the weather**, and **schedules prompts** ("every weekday at 9, brief me"). It also reads
 and edits files, runs shell commands, searches the web, controls music, looks at your screen, sets
 timers and remembers your preferences. You can watch it **think** and follow its **plan** live, and
@@ -48,6 +49,12 @@ Teams, Meet or FaceTime call starts, Ledge offers to **take notes** — transcri
 decisions and action items, no bot joining the call. Around 6 pm it **wraps up your day**, and on Fridays it shows
 **your week with Ledge** (time saved) as a card you can share. It **stays quiet while you watch a video**, present,
 are on a call or deep in typing, and saves anything useful for your next break.
+
+**Works inside your Mac:** it runs your **Shortcuts** (so it can act in any app that offers Shortcuts actions — Focus,
+Home, messages…), reads **the window you're looking at** when you say "summarise this" or "reply to this", and **finds
+your files** by what's in them, who sent them and when ("the PDF Sarah sent last week"). Teach it **routines** — "every
+time I say *start work*, open Linear and Slack, turn on Focus and brief me" — then just say "start work", put it on a
+schedule, or **add it to Apple Shortcuts** with one click so Siri and your keyboard shortcuts can start it too.
 
 **Free to start:** Apple's on-device AI works out of the box where available, and **Sign in with OpenRouter** gives
 free models in two clicks — no card.
@@ -89,14 +96,24 @@ Open **Settings › AI** (notch menu › Settings…) and pick one:
 | **Apple on-device** | macOS 26 with Apple Intelligence turned on — no setup, offline, with read-only tools (weather, calendar, reminders, memory) |
 | Sign in with ChatGPT | Coming once OpenAI issues OpenNotch its client ID |
 
-**Web search** works with no key (DuckDuckGo). For steadier results, pick **Brave Search** or **Tavily**
-in Settings › AI › Web search and paste a key; DuckDuckGo remains the fallback.
+**Web search** works with no key: it uses [Parallel](https://parallel.ai), which is free for light use and
+returns excerpts focused on what you asked. Only the search itself goes to Parallel, never your chats or
+memories ([privacy policy](https://parallel.ai/privacy-policy)). You can paste a Parallel key for higher limits,
+pick **Brave Search** or **Tavily** with a key, or switch to **DuckDuckGo** if you'd rather searches never go
+to Parallel. All of this is in Settings › AI › Web search. If one engine fails, the next one is tried.
 
 ### Connectors (MCP)
 
-Add more tools (GitHub, Gmail, Slack, a browser…) with any [MCP](https://modelcontextprotocol.io)
-server: **Settings › AI › Edit mcp.json**, using the common `mcpServers` format. Connector tools ask for
-approval unless you list them under `"autoApprove"`.
+**One click:** Settings › AI › Connectors has Notion, Linear, Todoist, Zapier (Gmail, Sheets, Slack and
+8,000 more apps), Atlassian (Jira, Confluence), Airtable, Dropbox, Granola, ClickUp, monday.com and Canva.
+Click **Connect**, sign in on the service's own page in your browser and click Allow: OpenNotch never sees
+your password, keeps the sign-in in your Keychain, and renews it by itself. **Add by URL** does the same
+for any other web MCP server that supports sign-in.
+
+**By hand:** add more tools (GitHub, a browser, local programs…) with any [MCP](https://modelcontextprotocol.io)
+server: **Settings › AI › Edit mcp.json**, using the common `mcpServers` format. A server can be a program
+to run (`"command"`) or a web address (`"url"`, https, with optional `"headers"` for a key). Connector tools
+ask for approval unless you list them under `"autoApprove"`.
 
 ## Meet Puff — and pick a desktop buddy
 
@@ -112,7 +129,15 @@ Liveliness: Calm, Friendly or Lively). **Ledge, Bee or Cat** jumps out of the no
 and walks on your windows, dances to your music and points at the notch when the assistant needs your OK.
 More companions are on the way.
 
+**Make it yours:** in the first-run setup (or Settings › General) pick Puff's **body** — Puff, Bunny, Bear, Kitty, Dino,
+Ghost, Shroom, Star, Cloud or Owl — an **extra** (headphones, scarf, crown, glasses, beanie, bow, pocket, flower,
+antenna, sprout), a **Jelly** or **Plush** finish and your own **colours**. Every new chat starts with an entrance —
+a superhero slam, a meteor, a lightning strike, a jetpack, a teleport or a spin-dash — and you can pick Puff up and
+toss it around.
+
 ![Puff, the notch character, in every mood](docs/images/puff.png)
+
+![Every Puff body with every extra, in Jelly and Plush](docs/images/puff-looks.png)
 
 ## Private by design
 

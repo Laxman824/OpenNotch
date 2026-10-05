@@ -26,12 +26,12 @@ enum OnboardingLogic {
     /// Tries that work with no permissions and no setup.
     static let tries = ["What can you do?", "Set a 5-minute timer", "Brainstorm 5 names for a cat"]
 
-    static let steps = 5
+    static let steps = 6
 
     /// What Puff says on the stage at each step (and when poked).
     static func line(_ step: Int) -> String {
-        ["Got a better name for me? ✍️", "That's my notch up there ☝️", "Pick a friend! 🐝", "Brain time! 🧠",
-         "Ooh — try one! ✨"][max(0, min(steps - 1, step))]
+        ["Got a better name for me? ✍️", "Dress me up! 🎨", "That's my notch up there ☝️", "Pick a friend! 🐝",
+         "Brain time! 🧠", "Ooh — try one! ✨"][max(0, min(steps - 1, step))]
     }
 
     /// Name ideas on the name step (never another product's character name).
@@ -48,11 +48,14 @@ enum OnboardingLogic {
     }
 
     /// Desktop buddy cheer for an onboarding step (`DesktopCompanion.cheerOnboarding`), if any.
-    static func cheer(_ step: Int) -> Int? { [3: 2, 4: 3][step] }
+    static func cheer(_ step: Int) -> Int? { [4: 2, 5: 3][step] }
     static let pokeLines = ["Hey! 😆", "That tickles!", "Boop!", "Again? 🙈", "I'm working here! 😤"]
 
     /// Where Puff stands (0…1 across the stage) for each step — it walks over when you move on.
-    static func spot(_ step: Int) -> Double { [0.2, 0.8, 0.18, 0.82, 0.5][max(0, min(steps - 1, step))] }
+    static func spot(_ step: Int) -> Double { [0.2, 0.5, 0.8, 0.18, 0.82, 0.5][max(0, min(steps - 1, step))] }
+
+    /// What Puff says when you pick a colour on the colours step.
+    static let colourLines = ["Ooh, I like it! 💜", "So fresh! ✨", "Is this my colour? 😍", "Looking sharp! 😎", "Fancy! 🌈"]
 
     // The landing, as pure curves of time since the drop began (seconds; a 0.75 s
     // charge-up at the notch comes before it).
@@ -101,9 +104,10 @@ struct OnboardingView: View {
                 Group {
                     switch step {
                     case 0: naming
-                    case 1: hello
-                    case 2: buddy
-                    case 3: brain
+                    case 1: colours
+                    case 2: hello
+                    case 3: buddy
+                    case 4: brain
                     default: tryOne
                     }
                 }
@@ -142,7 +146,7 @@ struct OnboardingView: View {
         .onAppear(perform: start)
         .onChange(of: ai.active) { _, k in
             // Signed in from the brain step: move on by itself.
-            if step == 3, k == .openrouter { go(4) }
+            if step == 4, k == .openrouter { go(5) }
         }
     }
 
@@ -212,6 +216,26 @@ struct OnboardingView: View {
             }
             .padding(14)
             .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.05)))
+            primary("Next") { go(3) }
+        }
+    }
+
+    /// Make me yours: body shape, an extra, jelly or plush, and colours — Puff on the stage changes as you pick.
+    private var colours: some View {
+        let picked = {
+            stage.cheer()
+            stage.say(OnboardingLogic.colourLines.randomElement() ?? "Nice! ✨")
+            SoundFX.play(.boop)
+        }
+        return VStack(spacing: 12) {
+            VStack(spacing: 5) {
+                Text("Make me yours").font(Typo.title(19))
+                Text("Pick my body, an extra and my colours — or let me surprise you. Change it any time in Settings › General.")
+                    .font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            }
+            PuffLookPicker(onPick: picked)
+            PuffColorPicker(onPick: picked)
             primary("Next") { go(2) }
         }
     }
@@ -297,9 +321,9 @@ struct OnboardingView: View {
                 }
             }
             if picked != nil {
-                primary("Next") { go(3) }
+                primary("Next") { go(4) }
             } else {
-                secondary("No thanks, just the notch") { go(3) }
+                secondary("No thanks, just the notch") { go(4) }
             }
         }
     }
@@ -329,15 +353,15 @@ struct OnboardingView: View {
             }
             switch b {
             case .other:
-                primary("Next") { go(4) }
+                primary("Next") { go(5) }
             case .apple:
-                primary("Keep Apple's AI") { go(4) }
+                primary("Keep Apple's AI") { go(5) }
                 secondary("Sign in with OpenRouter — free, smarter") { ai.signInOpenRouter() }
             case .none:
                 primary("Sign in with OpenRouter — free, no card") { ai.signInOpenRouter() }
                 HStack(spacing: 16) {
                     secondary("Use my own API key…") { SettingsWindow.shared.show(.ai) }
-                    secondary("Later") { go(4) }
+                    secondary("Later") { go(5) }
                 }
             }
         }
@@ -447,19 +471,20 @@ struct OnboardingView: View {
 }
 
 /// The intro title, letter by letter: each pops up with a little overshoot (one-shot).
-private struct PopTitle: View {
+struct PopTitle: View {
     let text: String
+    var font: Font = Typo.title(28)
     @State private var shown = false
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(text.enumerated()), id: \.offset) { i, ch in
                 Text(String(ch))
-                    .font(Typo.title(28))
+                    .font(font)
                     .foregroundStyle(LinearGradient(colors: [.white, Theme.glow[0].mix(.white, 0.5)], startPoint: .top, endPoint: .bottom))
                     .opacity(shown ? 1 : 0)
                     .offset(y: shown ? 0 : 16)
                     .scaleEffect(shown ? 1 : 0.4, anchor: .bottom)
-                    .animation(.spring(duration: 0.45, bounce: 0.55).delay(Double(i) * 0.035), value: shown)
+                    .animation(.spring(duration: 0.45, bounce: 0.55).delay(Double(i) * min(0.035, 1.1 / Double(max(1, text.count)))), value: shown)
             }
         }
         .shadow(color: Theme.glow[1].opacity(0.6), radius: 14)
@@ -472,7 +497,7 @@ private extension NSColor {
 }
 
 /// One-shot camera shake for the landing (animates `p` 0 → 1 once).
-private struct Shake: GeometryEffect {
+struct Shake: GeometryEffect {
     var p: Double
     var animatableData: Double { get { p } set { p = newValue } }
     func effectValue(size: CGSize) -> ProjectionTransform {
@@ -504,13 +529,26 @@ final class StageDirector {
 struct HeroStage: NSViewRepresentable {
     var visible: Bool
     var size: CGFloat = 70
+    /// The first message was just sent: Puff springs up and out (the handoff).
+    var leaving = false
+    /// The page flashes and shakes on an impact; the rest of the page builds in once Puff stands.
+    var onImpact: (() -> Void)? = nil
+    var onStand: (() -> Void)? = nil
+    func makeCoordinator() -> StageDirector { StageDirector() }
     func makeNSView(context: Context) -> OnboardingStageView {
         let v = OnboardingStageView()
         v.mini = true
         v.size = size
+        v.director = context.coordinator
+        context.coordinator.view = v
         return v
     }
-    func updateNSView(_ v: OnboardingStageView, context: Context) { v.setVisible(visible) }
+    func updateNSView(_ v: OnboardingStageView, context: Context) {
+        context.coordinator.onImpact = onImpact
+        context.coordinator.onStandUp = onStand
+        v.setVisible(visible)
+        if leaving { v.leave() }
+    }
 }
 
 struct OnboardingStage: NSViewRepresentable {
@@ -531,7 +569,7 @@ struct OnboardingStage: NSViewRepresentable {
 /// step's spot, wandering and fidgeting in between. Click Puff to poke it.
 @MainActor
 final class OnboardingStageView: NSView {
-    enum Phase { case waiting, charge, landing, standing, toBand, walking, wander, dance }
+    enum Phase { case waiting, charge, landing, standing, toBand, walking, wander, dance, entrance, held, thrown, leaving, gone }
 
     weak var director: StageDirector?
     private let sprites = PerchSprites()
@@ -561,6 +599,29 @@ final class OnboardingStageView: NSView {
     /// then Puff settles where it landed and fidgets — no walking, no band.
     var mini = false
     private var everShown = false
+    // Chat entrances (Entrances.swift), greeting, being picked up and tossed, handing off.
+    private var entrance = Entrance.slam
+    private var rollSide = 1.0
+    private var greeting = Greeting(line: "Hi! 👋")
+    private let umbrella = CALayer()
+    private let canopy = CAShapeLayer()
+    private let shaft = CAShapeLayer()
+    private let rope = CAShapeLayer()
+    private let ring = CAShapeLayer()
+    private var downAt: CGPoint?
+    private var heldAt = CGPoint.zero
+    private var samples: [(p: CGPoint, t: TimeInterval)] = []
+    private var toss = TossState(x: 0, y: 0, vx: 0, vy: 0)
+    private var tossTop = 0.0
+    private var bounceAt = Date.distantPast, bounceAmount = 0.0
+    private var exprOverride: PuffExpression?
+    private var exprUntil = Date.distantPast
+    // Hero shots: scene clock (slow-mo), cues fired so far, and their layers.
+    private var sceneT = 0.0
+    private var cueIndex = 0
+    private let flame = CAGradientLayer()
+    private let beamLayer = CAGradientLayer()
+    private let darkLayer = CALayer()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -597,6 +658,66 @@ final class OnboardingStageView: NSView {
         bubbleText.alignmentMode = .center
         bubble.addSublayer(bubbleText)
         layer?.addSublayer(bubble)
+        // Props for the entrances: an umbrella, a rope/cord, a portal ring on the floor.
+        for l in [canopy, shaft] { l.lineCap = .round; umbrella.addSublayer(l) }
+        umbrella.anchorPoint = CGPoint(x: 0.5, y: 0)
+        umbrella.opacity = 0
+        umbrella.zPosition = 2
+        rope.lineWidth = 2.5
+        rope.lineCap = .round
+        rope.fillColor = NSColor.clear.cgColor
+        rope.opacity = 0
+        ring.fillColor = NSColor(Theme.glow[1]).withAlphaComponent(0.22).cgColor
+        ring.strokeColor = NSColor(Theme.glow[0]).cgColor
+        ring.lineWidth = 3
+        ring.shadowColor = NSColor(Theme.glow[0]).cgColor; ring.shadowRadius = 6; ring.shadowOpacity = 0.9; ring.shadowOffset = .zero
+        ring.opacity = 0
+        ring.zPosition = -1
+        for l in [rope, ring, umbrella] { layer?.addSublayer(l) }
+        flame.type = .radial
+        flame.colors = [NSColor.white.cgColor, NSColor.systemYellow.cgColor, NSColor.systemOrange.withAlphaComponent(0.85).cgColor,
+                        NSColor.systemRed.withAlphaComponent(0).cgColor]
+        flame.locations = [0, 0.18, 0.5, 1]
+        flame.startPoint = CGPoint(x: 0.5, y: 0.5); flame.endPoint = CGPoint(x: 1, y: 1)
+        flame.opacity = 0
+        flame.zPosition = -0.5
+        beamLayer.colors = [NSColor(Theme.glow[0]).withAlphaComponent(0).cgColor, NSColor.white.withAlphaComponent(0.85).cgColor,
+                            NSColor(Theme.glow[0]).withAlphaComponent(0).cgColor]
+        beamLayer.startPoint = CGPoint(x: 0, y: 0.5); beamLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        beamLayer.opacity = 0
+        beamLayer.zPosition = -0.4
+        darkLayer.backgroundColor = NSColor.black.cgColor
+        darkLayer.opacity = 0
+        darkLayer.zPosition = -3
+        for l in [darkLayer, beamLayer, flame] { layer?.addSublayer(l) }
+    }
+
+    /// The umbrella's shapes for Puff's current size (canopy with scalloped rim, hooked shaft).
+    private func shapeUmbrella() {
+        let w = size * 1.3, shaftH = size * 0.42, h = size * 0.95
+        umbrella.bounds = CGRect(x: 0, y: 0, width: w, height: h)
+        let c = CGMutablePath()
+        let rim = shaftH, cx = w / 2, r = w / 2 - 2
+        c.move(to: CGPoint(x: cx - r, y: rim))
+        c.addQuadCurve(to: CGPoint(x: cx + r, y: rim), control: CGPoint(x: cx, y: rim + (h - rim) * 2))
+        let n = 4
+        for i in 0..<n {                                       // scallops along the rim, right to left
+            let x0 = cx + r - CGFloat(i) * 2 * r / CGFloat(n), x1 = x0 - 2 * r / CGFloat(n)
+            c.addQuadCurve(to: CGPoint(x: x1, y: rim), control: CGPoint(x: (x0 + x1) / 2, y: rim - 7))
+        }
+        c.closeSubpath()
+        canopy.path = c
+        canopy.fillColor = NSColor(Theme.glow[2]).cgColor
+        canopy.strokeColor = NSColor.white.withAlphaComponent(0.7).cgColor
+        canopy.lineWidth = 1.5
+        let sh = CGMutablePath()
+        sh.move(to: CGPoint(x: cx, y: rim + 4))
+        sh.addLine(to: CGPoint(x: cx, y: 5))
+        sh.addQuadCurve(to: CGPoint(x: cx - 7, y: 3), control: CGPoint(x: cx - 1, y: -2))
+        shaft.path = sh
+        shaft.strokeColor = NSColor(white: 0.85, alpha: 1).cgColor
+        shaft.fillColor = NSColor.clear.cgColor
+        shaft.lineWidth = 2.2
     }
 
     /// A speech bubble over Puff for a few seconds (follows it around).
@@ -635,8 +756,280 @@ final class OnboardingStageView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        physics.poke()
-        say(OnboardingLogic.pokeLines.randomElement() ?? "Boop!")
+        downAt = convert(event.locationInWindow, from: nil)
+        samples = []
+    }
+
+    /// Drag Puff to pick it up (it dangles), let go to throw it.
+    override func mouseDragged(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let d = downAt else { return }
+        if phase != .held {
+            guard hypot(p.x - d.x, p.y - d.y) > 4, [.wander, .standing, .dance, .walking].contains(phase) else { return }
+            set(.held)
+            SoundFX.play(.boop)
+        }
+        heldAt = p
+        samples.append((p, event.timestamp))
+        if samples.count > 6 { samples.removeFirst() }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { downAt = nil }
+        guard phase == .held else {
+            physics.poke()
+            say(OnboardingLogic.pokeLines.randomElement() ?? "Boop!")
+            return
+        }
+        let v = velocity()
+        let (vx, vy) = TossLogic.clampVelocity(Double(v.dx), Double(v.dy))
+        toss = TossState(x: Double(cx(x)), y: Double(max(restFloor, heldAt.y - size * 0.82)), vx: vx, vy: vy)
+        tossTop = 0
+        set(.thrown)
+    }
+
+    /// Pointer speed over the last few drag samples (points/s).
+    private func velocity() -> CGVector {
+        guard let a = samples.first, let b = samples.last, b.t > a.t else { return .zero }
+        let dt = CGFloat(b.t - a.t)
+        return CGVector(dx: (b.p.x - a.p.x) / dt, dy: (b.p.y - a.p.y) / dt)
+    }
+
+    /// x (0…1) for a point across the stage.
+    private func frac(_ px: CGFloat) -> CGFloat { min(1, max(0, (px - size / 2 - 20) / max(1, bounds.width - size - 40))) }
+    private var restFloor: CGFloat { mini ? landFloor : bandFloor }
+
+    /// The first message was sent: Puff springs up out of the empty stage (once).
+    func leave() {
+        guard mini, phase != .leaving, phase != .gone, timer != nil || phase == .wander else { return }
+        sparkles(at: CGPoint(x: cx(x), y: landFloor + size * 0.4))
+        if Liveliness.current != .calm { SoundFX.play(.pop) }
+        set(.leaving)
+    }
+
+    private var dropTop: CGFloat { mini ? bounds.height + 150 : bounds.height + 10 }
+
+    /// A camera punch-in on impact: the stage scales up a touch around its centre and back.
+    private func punchIn() {
+        guard mini, let l = layer else { return }
+        let c = CGPoint(x: bounds.midX, y: landFloor + size * 0.4)
+        func m(_ k: CGFloat) -> NSValue {
+            var tr = CATransform3DMakeTranslation(c.x, c.y, 0)
+            tr = CATransform3DScale(tr, k, k, 1)
+            return NSValue(caTransform3D: CATransform3DTranslate(tr, -c.x, -c.y, 0))
+        }
+        let a = CAKeyframeAnimation(keyPath: "sublayerTransform")
+        a.values = [m(1), m(1.13), m(1.05), m(1)]
+        a.keyTimes = [0, 0.18, 0.55, 1]
+        a.duration = 0.55
+        a.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut),
+                             CAMediaTimingFunction(name: .easeInEaseOut)]
+        l.add(a, forKey: "punch")
+    }
+
+    /// One-shot effects for the hero entrances.
+    private func fire(_ cue: EntranceCue, at p: CGPoint) {
+        switch cue {
+        case .charge: portal()
+        case .impact: impact(at: p)
+        case .fireImpact: fireImpact(at: p)
+        case .electricImpact: electricImpact(at: p)
+        case .smallImpact: smallImpact(at: p)
+        case .bolt: bolt(to: p)
+        case .materialize: materialize(at: p)
+        case .dust: softLanding(at: p)
+        case .sparkles: sparkles(at: CGPoint(x: p.x, y: p.y + size * 0.6))
+        }
+    }
+
+    private func burst(_ root: CALayer, at p: CGPoint, count: Int, colors: [NSColor], spread: ClosedRange<CGFloat>,
+                       rise: ClosedRange<CGFloat>, size sz: ClosedRange<CGFloat>, duration: ClosedRange<Double>, gravity: Bool) {
+        for i in 0..<count {
+            let d = CALayer()
+            let r = CGFloat.random(in: sz)
+            d.bounds = CGRect(x: 0, y: 0, width: r, height: r)
+            d.cornerRadius = r / 2
+            d.backgroundColor = colors[i % colors.count].cgColor
+            d.position = p
+            d.zPosition = 5
+            root.addSublayer(d)
+            let side: CGFloat = i % 2 == 0 ? 1 : -1
+            let to = CGPoint(x: p.x + side * CGFloat.random(in: spread), y: p.y + (gravity ? -CGFloat.random(in: 0...8) : CGFloat.random(in: rise)))
+            let path = CGMutablePath()
+            path.move(to: p)
+            path.addQuadCurve(to: to, control: CGPoint(x: (p.x + to.x) / 2, y: p.y + CGFloat.random(in: rise)))
+            let move = CAKeyframeAnimation(keyPath: "position")
+            move.path = path
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [1, 1, 0]; fade.keyTimes = [0, 0.6, 1]
+            let g = CAAnimationGroup()
+            g.animations = [move, fade]
+            g.duration = Double.random(in: duration)
+            g.fillMode = .forwards; g.isRemovedOnCompletion = false
+            d.opacity = 0
+            d.add(g, forKey: "burst")
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration.upperBound + 0.1) { d.removeFromSuperlayer() }
+        }
+    }
+
+    private func ringWave(_ root: CALayer, at p: CGPoint, color: NSColor, width: CGFloat, delay: Double, duration: Double = 0.6) {
+        let ring = CAShapeLayer()
+        ring.path = CGPath(ellipseIn: CGRect(x: -150, y: -22, width: 300, height: 44), transform: nil)
+        ring.fillColor = NSColor.clear.cgColor
+        ring.strokeColor = color.cgColor
+        ring.lineWidth = width
+        ring.shadowColor = color.cgColor; ring.shadowRadius = 5; ring.shadowOpacity = 0.9; ring.shadowOffset = .zero
+        ring.position = p
+        animate(ring, in: root, duration: duration, delay: delay, scale: (0.1, 1.2), opacity: (1, 0))
+    }
+
+    /// Meteor: a scorched crater, a ring of fire, embers flung up, smoke rolling away.
+    private func fireImpact(at p: CGPoint) {
+        SoundFX.play(.pop)
+        director?.onImpact?()
+        punchIn()
+        guard let root = layer else { return }
+        let crater = CAGradientLayer()
+        crater.type = .radial
+        crater.colors = [NSColor.black.withAlphaComponent(0.55).cgColor, NSColor.systemOrange.withAlphaComponent(0.25).cgColor, NSColor.clear.cgColor]
+        crater.startPoint = CGPoint(x: 0.5, y: 0.5); crater.endPoint = CGPoint(x: 1, y: 1)
+        crater.bounds = CGRect(x: 0, y: 0, width: 170, height: 34)
+        crater.position = CGPoint(x: p.x, y: p.y + 2)
+        crater.zPosition = -2
+        animate(crater, in: root, duration: 1.8, scale: (0.4, 1), opacity: (1, 0))
+        let blast = CAGradientLayer()
+        blast.type = .radial
+        blast.colors = [NSColor.white.cgColor, NSColor.systemYellow.withAlphaComponent(0.9).cgColor,
+                        NSColor.systemOrange.withAlphaComponent(0.5).cgColor, NSColor.clear.cgColor]
+        blast.startPoint = CGPoint(x: 0.5, y: 0.5); blast.endPoint = CGPoint(x: 1, y: 1)
+        blast.bounds = CGRect(x: 0, y: 0, width: 280, height: 160)
+        blast.position = CGPoint(x: p.x, y: p.y + 24)
+        animate(blast, in: root, duration: 0.5, scale: (0.2, 1.3), opacity: (1, 0))
+        ringWave(root, at: p, color: .systemOrange, width: 3.5, delay: 0)
+        ringWave(root, at: p, color: .systemYellow, width: 2, delay: 0.1)
+        burst(root, at: p, count: 22, colors: [.systemYellow, .systemOrange, .systemRed, .white], spread: 30...170, rise: 50...150,
+              size: 2.5...5.5, duration: 0.6...1.1, gravity: true)
+        for k in 0..<5 {                                             // smoke rolling up and away
+            let puffL = CAGradientLayer()
+            puffL.type = .radial
+            puffL.colors = [NSColor(white: 0.55, alpha: 0.35).cgColor, NSColor.clear.cgColor]
+            puffL.startPoint = CGPoint(x: 0.5, y: 0.5); puffL.endPoint = CGPoint(x: 1, y: 1)
+            puffL.bounds = CGRect(x: 0, y: 0, width: 80, height: 60)
+            let side: CGFloat = k % 2 == 0 ? 1 : -1
+            puffL.position = CGPoint(x: p.x + side * CGFloat(20 + k * 22), y: p.y + 18)
+            root.addSublayer(puffL)
+            puffL.opacity = 0
+            let up = CABasicAnimation(keyPath: "position.y")
+            up.fromValue = p.y + 18; up.toValue = p.y + 18 + CGFloat.random(in: 40...90)
+            let sc = CABasicAnimation(keyPath: "transform.scale")
+            sc.fromValue = 0.4; sc.toValue = 1.8
+            let f = CAKeyframeAnimation(keyPath: "opacity")
+            f.values = [0, 1, 0]; f.keyTimes = [0, 0.2, 1]
+            let g = CAAnimationGroup()
+            g.animations = [up, sc, f]
+            g.duration = 1.6
+            g.beginTime = CACurrentMediaTime() + Double(k) * 0.05
+            g.fillMode = .both; g.isRemovedOnCompletion = false
+            puffL.add(g, forKey: "smoke")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.9) { puffL.removeFromSuperlayer() }
+        }
+    }
+
+    /// Lightning: cyan shockwaves and crackling sparks around the landing.
+    private func electricImpact(at p: CGPoint) {
+        SoundFX.play(.pop)
+        director?.onImpact?()
+        punchIn()
+        guard let root = layer else { return }
+        let cyan = NSColor(red: 0.55, green: 0.9, blue: 1, alpha: 1)
+        ringWave(root, at: p, color: cyan, width: 3, delay: 0)
+        ringWave(root, at: p, color: .white, width: 1.5, delay: 0.08)
+        burst(root, at: p, count: 16, colors: [cyan, .white], spread: 20...140, rise: 20...110, size: 2...4, duration: 0.4...0.8, gravity: false)
+        for i in 0..<6 {                                              // little zig-zag crackles around Puff
+            let z = CAShapeLayer()
+            let a = Double(i) / 6 * 2 * .pi
+            let c = CGPoint(x: p.x + CGFloat(cos(a)) * size * 0.7, y: p.y + size * 0.45 + CGFloat(sin(a)) * size * 0.55)
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: c.x - 8, y: c.y + 6))
+            path.addLine(to: CGPoint(x: c.x - 2, y: c.y + 1)); path.addLine(to: CGPoint(x: c.x + 1, y: c.y + 5)); path.addLine(to: CGPoint(x: c.x + 8, y: c.y - 6))
+            z.path = path
+            z.strokeColor = cyan.cgColor; z.fillColor = NSColor.clear.cgColor; z.lineWidth = 1.8; z.lineJoin = .round
+            z.shadowColor = cyan.cgColor; z.shadowRadius = 3; z.shadowOpacity = 1; z.shadowOffset = .zero
+            animate(z, in: root, duration: 0.35, delay: Double(i % 3) * 0.12 + 0.05, scale: (0.6, 1.2), opacity: (1, 0))
+        }
+    }
+
+    /// A lightning bolt from above the stage down to Puff, flickering.
+    private func bolt(to p: CGPoint) {
+        guard let root = layer else { return }
+        director?.onImpact?()
+        let b = CAShapeLayer()
+        let path = CGMutablePath()
+        var q = CGPoint(x: p.x + CGFloat.random(in: -30...30), y: bounds.height + 320)
+        path.move(to: q)
+        let steps = 9
+        for k in 1...steps {
+            let y = q.y - (bounds.height + 320 - p.y) / CGFloat(steps)
+            let x = k == steps ? p.x : p.x + CGFloat.random(in: -26...26) * CGFloat(steps - k) / CGFloat(steps)
+            q = CGPoint(x: x, y: y)
+            path.addLine(to: q)
+        }
+        b.path = path
+        b.strokeColor = NSColor.white.cgColor
+        b.fillColor = NSColor.clear.cgColor
+        b.lineWidth = 3.5
+        b.lineJoin = .miter
+        b.shadowColor = NSColor(red: 0.55, green: 0.9, blue: 1, alpha: 1).cgColor
+        b.shadowRadius = 9; b.shadowOpacity = 1; b.shadowOffset = .zero
+        b.zPosition = 25
+        root.addSublayer(b)
+        let f = CAKeyframeAnimation(keyPath: "opacity")
+        f.values = [1, 0.2, 1, 0.3, 1, 0]
+        f.keyTimes = [0, 0.15, 0.3, 0.45, 0.6, 1]
+        f.duration = 0.32
+        f.fillMode = .forwards; f.isRemovedOnCompletion = false
+        b.add(f, forKey: "flicker")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { b.removeFromSuperlayer() }
+        SoundFX.play(.boop)
+    }
+
+    /// Teleport: a ring bursts out as Puff solidifies, sparkles fall in.
+    private func materialize(at p: CGPoint) {
+        SoundFX.play(.yay)
+        director?.onImpact?()
+        punchIn()
+        guard let root = layer else { return }
+        ringWave(root, at: CGPoint(x: p.x, y: p.y + 2), color: NSColor(Theme.glow[0]), width: 3, delay: 0)
+        ringWave(root, at: CGPoint(x: p.x, y: p.y + size * 0.5), color: NSColor(Theme.glow[1]), width: 2, delay: 0.06, duration: 0.5)
+        burst(root, at: CGPoint(x: p.x, y: p.y + size * 0.5), count: 18, colors: [NSColor(Theme.glow[0]), .white, NSColor(Theme.glow[2])],
+              spread: 30...120, rise: -40...80, size: 2...4, duration: 0.5...0.9, gravity: false)
+    }
+
+    /// Jetpack touchdown / small landings: a shockwave and a dust ring.
+    private func smallImpact(at p: CGPoint) {
+        SoundFX.play(.pop)
+        director?.onImpact?()
+        punchIn()
+        guard let root = layer else { return }
+        ringWave(root, at: p, color: NSColor(Theme.glow[0]), width: 2.5, delay: 0)
+        softLanding(at: p)
+        burst(root, at: p, count: 12, colors: [NSColor.white.withAlphaComponent(0.6), NSColor(Theme.glow[2])], spread: 30...130,
+              rise: 10...50, size: 3...7, duration: 0.45...0.8, gravity: false)
+    }
+
+    /// A light touchdown for the non-slam entrances: two dust puffs and a pop.
+    private func softLanding(at p: CGPoint) {
+        guard let root = layer else { return }
+        if entrance != .soft { SoundFX.play(.pop) }
+        for side in [-1.0, 1.0] {
+            let cloud = CAGradientLayer()
+            cloud.type = .radial
+            cloud.colors = [NSColor.white.withAlphaComponent(0.2).cgColor, NSColor.clear.cgColor]
+            cloud.startPoint = CGPoint(x: 0.5, y: 0.5); cloud.endPoint = CGPoint(x: 1, y: 1)
+            cloud.bounds = CGRect(x: 0, y: 0, width: 70, height: 40)
+            cloud.position = CGPoint(x: p.x + CGFloat(side) * 34, y: p.y + 10)
+            animate(cloud, in: root, duration: 0.9, scale: (0.3, 1.4), opacity: (entrance == .soft ? 0.5 : 1, 0))
+        }
     }
 
     // MARK: geometry
@@ -665,12 +1058,34 @@ final class OnboardingStageView: NSView {
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             // No crash-landing for people who asked for less motion: just appear and wave.
             x = home; set(.wander); begin(.wave)
+            if mini { say(GreetingLogic.greeting(now: Date(), lastLanding: nil, roll: Double.random(in: 0..<1)).line) }
             director?.onStandUp?()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.director?.onReady?() }
             return
         }
         landed = false
-        if mini { set(.landing); return }                    // straight drop, no charge-up
+        if mini {
+            let d = UserDefaults.standard
+            let last = d.string(forKey: "puff.lastEntrance").flatMap(Entrance.init(rawValue:))
+            entrance = EntranceLogic.pick(liveliness: Liveliness.current, reduceMotion: false, last: last, roll: Double.random(in: 0..<1))
+            rollSide = Bool.random() ? 1 : -1
+            greeting = GreetingLogic.greeting(now: Date(), lastLanding: d.object(forKey: "puff.lastLanding") as? Date,
+                                             roll: Double.random(in: 0..<1))
+            d.set(entrance.rawValue, forKey: "puff.lastEntrance")
+            d.set(Date(), forKey: "puff.lastLanding")
+            shapeUmbrella()
+            if entrance == .bungee { rope.strokeColor = NSColor(Theme.glow[2]).cgColor }
+            else { rope.strokeColor = NSColor(red: 0.86, green: 0.74, blue: 0.55, alpha: 1).cgColor }
+            if entrance == .portal || entrance == .teleport { SoundFX.play(.peek) }
+            if entrance == .slam {                            // the full superhero landing, charge-up first
+                SoundFX.play(.peek)
+                portal()
+                set(.charge)
+            } else {
+                set(.entrance)
+            }
+            return
+        }
         SoundFX.play(.peek)
         portal()
         set(.charge)
@@ -694,8 +1109,12 @@ final class OnboardingStageView: NSView {
     private func set(_ p: Phase) {
         phase = p
         phaseStart = Date()
+        sceneT = 0
+        cueIndex = 0
         // Smooth motion while something big happens, the policy rate otherwise.
+        if p == .gone { setTimer(nil); return }
         let busy = p == .charge || p == .landing || p == .standing || p == .toBand || p == .walking || p == .dance
+            || p == .entrance || p == .held || p == .thrown || p == .leaving
         setTimer(busy ? 60 : AnimationPolicy.shared.fps)
     }
 
@@ -720,7 +1139,12 @@ final class OnboardingStageView: NSView {
         let now = Date()
         let dt = CGFloat(min(0.1, now.timeIntervalSince(last)))
         last = now
-        let t = now.timeIntervalSince(phaseStart)
+        var t = now.timeIntervalSince(phaseStart)
+        if phase == .landing || phase == .entrance {
+            // Scene time runs slow for a beat before the big moment (the "shot").
+            sceneT += Double(dt) * EntranceLogic.timeScale(phase == .landing ? .slam : entrance, t: sceneT)
+            t = sceneT
+        }
         physics.step(now, doneAt: nil, dragging: false)
 
         var feet = bandFloor
@@ -731,18 +1155,96 @@ final class OnboardingStageView: NSView {
         var trail = false
         var spin = 0.0, lean = 0.0
         var expression = physics.current
+        var dxOff: CGFloat = 0, scaleK: CGFloat = 1, alpha: Float = 1
+        var props = EntranceFrame()
+        props.umbrella = 0
 
         switch phase {
-        case .waiting:
+        case .waiting, .gone:
             return
+        case .entrance:
+            let f = EntranceLogic.frame(entrance, t: t, drop: Double(dropTop - landFloor), size: Double(size),
+                                        width: Double(bounds.width), side: rollSide)
+            let cues = EntranceLogic.cues(entrance)
+            while cueIndex < cues.count && t >= cues[cueIndex].at {
+                fire(cues[cueIndex].cue, at: CGPoint(x: cx(x) + CGFloat(f.dx), y: landFloor))
+                cueIndex += 1
+            }
+            feet = landFloor + CGFloat(f.feet)
+            dxOff = CGFloat(f.dx); spin = f.spin; lean = f.lean; scaleK = CGFloat(f.scale); alpha = Float(f.opacity)
+            extraSquash = f.squash; spriteClip = f.clip; trail = f.trail
+            if let e = f.expression { expression = e }
+            props = f
+            if let td = EntranceLogic.touchdown(entrance), t >= td, !landed {
+                landed = true
+                if !entrance.isHero { softLanding(at: CGPoint(x: cx(x), y: landFloor)) }
+            }
+            if entrance == .portal && t >= 0.3 && !landed && phaseStart.addingTimeInterval(0.3) > now.addingTimeInterval(-dt) {
+                sparkles(at: CGPoint(x: cx(x), y: landFloor + 20))
+            }
+            if t >= EntranceLogic.duration(entrance) {
+                physics.celebrate(sound: false)
+                if entrance != .soft { SoundFX.play(.yay) }
+                if entrance.isHero { sparkles(at: CGPoint(x: cx(x), y: landFloor + size * 0.6)) }
+                begin(.wave)
+                director?.onStandUp?()
+                set(.standing)
+            }
+        case .held:
+            // Dangling from the pointer by its head.
+            feet = max(landFloor, heldAt.y - size * 0.82)
+            x = frac(heldAt.x)
+            spriteClip = "stretch"; expression = .surprised
+            let v = velocity()
+            lean = max(-0.35, min(0.35, Double(v.dx) * 0.0004))
+        case .thrown:
+            let (n, hit) = TossLogic.step(toss, dt: Double(dt), minX: Double(cx(0)), maxX: Double(cx(1)), floor: Double(restFloor),
+                                          ceiling: Double(bounds.height - size * 0.3), radius: Double(size) * 0.45)
+            toss = n
+            tossTop = max(tossTop, (n.vx * n.vx + n.vy * n.vy).squareRoot())
+            if let speed = hit, speed > 220 {
+                bounceAt = now; bounceAmount = min(0.32, speed / 2600)
+                SoundFX.play(.pop)
+            }
+            feet = CGFloat(n.y); x = frac(CGFloat(n.x))
+            spriteClip = n.y > Double(restFloor) + 2 ? "stretch" : "idle"
+            if TossLogic.settled(n, floor: Double(restFloor)) {
+                // Turn upright, then carry on.
+                let upright = (toss.spin / (2 * .pi)).rounded() * 2 * .pi
+                toss.spin += (upright - toss.spin) * min(1, Double(dt) * 14)
+                if abs(upright - toss.spin) < 0.03 {
+                    toss.spin = 0
+                    if tossTop > 1000 {
+                        exprOverride = .dizzy; exprUntil = now.addingTimeInterval(1.4)
+                        say(["Wheee! 😵‍💫", "Again! 😆", "Whoa! 🤪"].randomElement() ?? "Wheee!")
+                    } else {
+                        say(["Hehe 😆", "Again? 🙈", "Boop!"].randomElement() ?? "Hehe")
+                    }
+                    home = x; target = x
+                    if mini { set(.wander) } else { target = CGFloat(OnboardingLogic.spot(0)); home = target; fast = false; set(.walking) }
+                }
+            }
+            spin = toss.spin
+        case .leaving:
+            // Hands off to the first message: crouch, then spring up out of the stage.
+            if t < 0.12 {
+                feet = landFloor; extraSquash = 0.25 * t / 0.12; spriteClip = "idle"
+            } else {
+                let q = min(1, (t - 0.12) / 0.45)
+                feet = landFloor + CGFloat(q * q) * (bounds.height + 90)
+                scaleK = 1 - 0.45 * CGFloat(q)
+                alpha = Float(1 - max(0, (q - 0.55) / 0.45))
+                spriteClip = "stretch"; trail = true; expression = .celebrate
+                if q >= 1 { set(.gone); puff.opacity = 0; ghosts.forEach { $0.opacity = 0 }; return }
+            }
         case .charge:
             // The notch glows and drips sparks; Puff is still inside.
             if t >= OnboardingLogic.chargeTime { set(.landing) }
             return
         case .landing:
             let f = OnboardingLogic.fall(t)
-            feet = bounds.height + 10 + (landFloor - bounds.height - 10) * CGFloat(f)
-            let heroEnd = OnboardingLogic.fallTime + (mini ? 0.45 : 0.85)
+            feet = dropTop + (landFloor - dropTop) * CGFloat(f)
+            let heroEnd = OnboardingLogic.fallTime + 0.85
             extraSquash = OnboardingLogic.impactSquash(t)
             if t < OnboardingLogic.fallTime {
                 spriteClip = "stretch"                       // arms up, flipping as it dives
@@ -773,7 +1275,13 @@ final class OnboardingStageView: NSView {
             if mini && t > 1.0 {
                 home = x; target = x
                 set(.wander)
-                say("Hi! 👋")
+                say(greeting.line)
+                if greeting.first != .wave { begin(greeting.first) }
+                if let e = greeting.expression { exprOverride = e; exprUntil = Date().addingTimeInterval(1.6) }
+                if greeting.party && Liveliness.current != .calm {
+                    physics.celebrate(sound: false)
+                    sparkles(at: CGPoint(x: cx(x), y: landFloor + size * 0.6))
+                }
             } else if !mini && t > 1.9 {
                 hopFrom = (x, landFloor)
                 director?.onReady?()
@@ -825,6 +1333,20 @@ final class OnboardingStageView: NSView {
             spriteClip = "dance"
         }
 
+        // Plays with you: eyes follow the pointer, types along while you type (the chat's empty stage).
+        if (phase == .wander || phase == .standing) && gaze == 0 && (spriteClip == "idle" || spriteClip == "wave") {
+            if let w = window {
+                let m = convert(w.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+                gaze = GazeLogic.toward(dx: Double(m.x - cx(x)))
+            }
+            if mini && phase == .wander && spriteClip == "idle"
+                && CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) < 0.7 {
+                spriteClip = "typing"; gaze = 0
+            }
+        }
+        if now < exprUntil, let e = exprOverride { expression = e }
+        extraSquash += EntranceLogic.wobble(now.timeIntervalSince(bounceAt), amount: bounceAmount)
+
         // Pick the frame.
         let clock = now.timeIntervalSinceReferenceDate
         var key = PerchSprites.Key(clip: spriteClip, frame: 0, gazeX: gaze, blink: false, mood: mood,
@@ -834,7 +1356,7 @@ final class OnboardingStageView: NSView {
             key.frame = Int(clock * PerchSprites.fps) % 48
             key.blink = clock.truncatingRemainder(dividingBy: 3.8) > 3.62
             if key.blink { key.frame = 0 }
-        case "walk", "dance":
+        case "walk", "dance", "typing":
             key.frame = Int(clock * PerchSprites.fps) % PerchSprites.frames(spriteClip)
         case "stretch":
             key.frame = PerchSprites.frames("stretch") / 2   // arms all the way up
@@ -850,22 +1372,61 @@ final class OnboardingStageView: NSView {
         CATransaction.setDisableActions(true)
         let img = sprites.image(key, size: size)
         if let img { puff.contents = img }
-        puff.opacity = 1
+        puff.opacity = alpha
         puff.bounds = CGRect(x: 0, y: 0, width: size, height: size)
-        let px = cx(x)
+        let px = cx(x) + dxOff
         let lift = CGFloat(physics.hop) * size * 0.5
         puff.position = CGPoint(x: px, y: feet + lift - size * 0.08)
         let sq = CGFloat(physics.squash + extraSquash)
         var tr = CATransform3DMakeRotation(-CGFloat(physics.sway + lean) + CGFloat(spin), 0, 0, 1)
-        tr = CATransform3DScale(tr, 1 + sq * 0.8, 1 - sq, 1)
+        tr = CATransform3DScale(tr, (1 + sq * 0.8) * scaleK, (1 - sq) * scaleK, 1)
         if spin != 0 {
             // Flip around the middle of the body, not the feet.
             tr = CATransform3DTranslate(CATransform3DIdentity, 0, size * 0.45, 0)
             tr = CATransform3DRotate(tr, CGFloat(spin), 0, 0, 1)
             tr = CATransform3DTranslate(tr, 0, -size * 0.45, 0)
-            tr = CATransform3DScale(tr, 1 + sq * 0.8, 1 - sq, 1)
+            tr = CATransform3DScale(tr, (1 + sq * 0.8) * scaleK, (1 - sq) * scaleK, 1)
         }
         puff.transform = tr
+        // Entrance props.
+        let hands = puff.position.y + size * 0.9
+        umbrella.opacity = props.umbrella > 0.02 ? 1 : 0
+        if props.umbrella > 0.02 {
+            umbrella.position = CGPoint(x: px, y: hands - 6)
+            umbrella.transform = CATransform3DScale(CATransform3DMakeRotation(-CGFloat(lean) * 1.4, 0, 0, 1),
+                                                    CGFloat(0.12 + 0.88 * props.umbrella), 1, 1)
+        }
+        if let end = props.ropeEnd {
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: px, y: bounds.height + 60))
+            path.addLine(to: CGPoint(x: px, y: landFloor + CGFloat(end)))
+            rope.path = path
+            rope.opacity = 1
+        } else {
+            rope.opacity = 0
+        }
+        // Flame: under the feet for the jetpack, a blazing aura around a meteor.
+        flame.opacity = Float(props.flame)
+        if props.flame > 0.01 {
+            let fl = entrance == .meteor ? size * 1.5 : size * 0.55
+            let flick = 1 + 0.12 * CGFloat(sin(now.timeIntervalSinceReferenceDate * 47))
+            flame.bounds = CGRect(x: 0, y: 0, width: fl * (entrance == .meteor ? 1 : 0.7), height: fl * flick)
+            flame.position = entrance == .meteor ? CGPoint(x: px, y: puff.position.y + size * 0.5)
+                : CGPoint(x: px, y: puff.position.y - fl * 0.35)
+        }
+        beamLayer.opacity = Float(props.beam)
+        if props.beam > 0.01 {
+            beamLayer.bounds = CGRect(x: 0, y: 0, width: size * 1.1, height: bounds.height + 400)
+            beamLayer.position = CGPoint(x: px, y: landFloor + (bounds.height + 400) / 2 - 4)
+        }
+        darkLayer.opacity = Float(props.dark * 0.6)
+        if props.dark > 0.01 { darkLayer.frame = bounds.insetBy(dx: -400, dy: -300) }
+        ring.opacity = props.ring > 0.01 ? 1 : 0
+        if props.ring > 0.01 {
+            ring.path = CGPath(ellipseIn: CGRect(x: -size * 0.65, y: -8, width: size * 1.3, height: 16), transform: nil)
+            ring.position = CGPoint(x: px, y: landFloor + 2)
+            ring.transform = CATransform3DMakeScale(CGFloat(props.ring), CGFloat(props.ring), 1)
+        }
         for (i, l) in speedLines.enumerated() {
             let off = CGFloat(i - 2) * size * 0.2
             let len = size * (1.1 + 0.35 * CGFloat(i % 3))
@@ -882,13 +1443,14 @@ final class OnboardingStageView: NSView {
             g.opacity = trail ? Float(0.32 - Double(i) * 0.14) : 0
         }
         // Ground groundShadow: smaller and fainter the higher it is above the floor it's over.
-        let floor = phase == .landing || phase == .standing ? landFloor : (phase == .toBand ? min(feet, bandFloor) : bandFloor)
+        let floor = phase == .landing || phase == .standing || phase == .entrance || phase == .leaving ? landFloor
+            : (phase == .toBand ? min(feet, bandFloor) : (phase == .held || phase == .thrown ? restFloor : bandFloor))
         let height = max(0, feet + lift - floor)
         let k = max(0.25, 1 - height / 160)
         groundShadow.bounds = CGRect(x: 0, y: 0, width: size * 0.62 * k * (1 + max(0, sq) * 0.6), height: 7 * k)
         groundShadow.cornerRadius = 3.5 * k
         groundShadow.position = CGPoint(x: px, y: floor + 1)
-        groundShadow.opacity = Float(0.9 * k)
+        groundShadow.opacity = Float(0.9 * k) * alpha
         // Bubble beside the head, on the side facing the middle (above would run under the header).
         let bw = bubble.bounds.width / 2
         let side: CGFloat = px < bounds.width / 2 ? 1 : -1
@@ -1025,16 +1587,19 @@ final class OnboardingStageView: NSView {
     private func impact(at p: CGPoint) {
         SoundFX.play(.pop)
         director?.onImpact?()
+        punchIn()
         guard let root = layer else { return }
         let glow = glowColors
 
+        do {
         if !mini {
-        // Impact frame: the whole stage flashes white for a blink.
-        let white = CALayer()
-        white.backgroundColor = NSColor.white.cgColor
-        white.frame = bounds
-        white.zPosition = 30
-        animate(white, in: root, duration: 0.18, scale: (1, 1), opacity: (0.45, 0))
+            // Impact frame: the whole stage flashes white for a blink (the chat flashes its whole page instead).
+            let white = CALayer()
+            white.backgroundColor = NSColor.white.cgColor
+            white.frame = bounds
+            white.zPosition = 30
+            animate(white, in: root, duration: 0.18, scale: (1, 1), opacity: (0.45, 0))
+        }
 
         // Ground cracks: glowing jagged lines racing out along the floor, fading slowly.
         let cracks = CAShapeLayer()
@@ -1086,7 +1651,7 @@ final class OnboardingStageView: NSView {
         }
 
         // Rocks and bits flung up, falling back with gravity.
-        for i in 0..<(mini ? 0 : 10) {
+        for i in 0..<10 {
             let r = CALayer()
             let sz = CGFloat.random(in: 3...6)
             r.bounds = CGRect(x: 0, y: 0, width: sz, height: sz)

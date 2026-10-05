@@ -123,7 +123,7 @@ enum AgentChecks {
         // Router: attached context counts, the stamp doesn't
         check("router: context counts", ToolRouter.routingText("sum it up" + ctx + "\nI'm looking at this web page: “x”").contains("web page"))
         check("router: stamp dropped", !ToolRouter.routingText("hi" + ctx + "\nSent: Thu 2 Oct").contains("Sent"))
-        let toolsAll = ToolKit.all() + DailyTools.all() + RecallTools.all() + [ToolRouter.moreTools]
+        let toolsAll = ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all() + [ToolRouter.moreTools]
         for c in EvalCase.cases where !c.noTools {
             let names = Set(ToolRouter.select(toolsAll, conversation: [ChatMessage(role: .user, text: c.prompt)]).map(\.name))
             let ok = c.all.allSatisfy(names.contains) && (c.any.isEmpty || c.any.contains(where: names.contains))
@@ -184,8 +184,17 @@ enum AgentChecks {
         check("name: rejects empty/long/odd", N("") == nil && N("   ") == nil && N(String(repeating: "a", count: 21)) == nil
               && N("rm -rf; ls") == nil && N("123") == nil && N("<b>") == nil)
         check("name: no other product's character", !OnboardingLogic.nameIdeas.contains("Mochi"))
-        check("onboarding: buddy cheers only on brain/try", OnboardingLogic.cheer(3) == 2 && OnboardingLogic.cheer(4) == 3
-              && OnboardingLogic.cheer(0) == nil && OnboardingLogic.cheer(2) == nil)
+        check("onboarding: buddy cheers only on brain/try", OnboardingLogic.cheer(4) == 2 && OnboardingLogic.cheer(5) == 3
+              && OnboardingLogic.cheer(0) == nil && OnboardingLogic.cheer(1) == nil && OnboardingLogic.cheer(3) == nil)
+        // Custom colours
+        let cc = PaletteCode.Colors(top: 0xFF8800, bottom: 0x0011AA, eye: 0xFFFFFF)
+        check("palette: custom round trip", PaletteCode.decode(PaletteCode.encode(cc)) == cc && PaletteCode.encode(cc) == "custom:FF8800-0011AA-FFFFFF")
+        check("palette: presets aren't custom", PaletteCode.decode("aurora") == nil && AvatarPalette.named("aurora").id == "aurora")
+        check("palette: bad custom falls back", PaletteCode.decode("custom:FF8800-zz") == nil && AvatarPalette.named("custom:nope").id == "aurora")
+        check("palette: custom renders", AvatarPalette.named(PaletteCode.encode(cc)).name == "Custom")
+        check("palette: hsb", PaletteCode.rgb(h: 0, s: 1, b: 1) == 0xFF0000 && PaletteCode.rgb(h: 1.0 / 3, s: 1, b: 1) == 0x00FF00
+              && PaletteCode.rgb(h: 0, s: 0, b: 1) == 0xFFFFFF)
+        check("palette: preset → custom keeps its colours", PaletteCode.colors(of: "mono").top == PaletteCode.rgb(AvatarPalette.named("mono").head[0]))
         check("landing: one full flip", abs(OnboardingLogic.spin(OnboardingLogic.fallTime) + 2 * .pi) < 1e-9 && OnboardingLogic.spin(0) == 0)
         // Steps: a finished run of tool/thinking rows folds into one; a single row stays as is.
         func tool(_ id: String, _ state: String = "done", _ verb: String = "Looking") -> Item {
@@ -257,6 +266,374 @@ enum AgentChecks {
               && MeetingLogic.clip(String(repeating: "a", count: 100) + String(repeating: "z", count: 100), max: 60).hasSuffix("zzzz"))
         let wb = PresenceLogic.welcomeBack(away: 40 * 60, nextEvent: ("Design review", Date()), remindersDue: 2, answerReady: true)
         check("welcome back: summary", wb.detail.hasPrefix("Your answer is ready") && wb.detail.contains("2 reminders") && wb.action == .openChat)
+    }
+
+    /// Parallel search, search order and MCP over HTTP (fixtures only — no network).
+    private static func webSearchAndMCP() {
+        // Parallel results
+        let ok: [String: Any] = ["isError": false, "structuredContent": ["results": [
+            ["url": "https://swift.org/a", "title": "\n  Swift 6.2  Released \n", "publish_date": "2025-09-15", "excerpts": ["One\n\n two", "three"]],
+            ["url": "https://swift.org/a", "title": "dup", "excerpts": ["again"]],
+            ["url": "https://empty.dev", "title": "E", "excerpts": [" \n "]],
+            ["url": "javascript:alert(1)", "title": "J", "excerpts": ["x"]],
+            ["url": "https://long.dev", "excerpts": [String(repeating: "w ", count: 2000)]],
+        ]]]
+        let rows = (try? ParallelSearch.parse(ok)) ?? []
+        check("parallel: dedupes, drops empty + non-web", rows.map(\.url) == ["https://swift.org/a", "https://long.dev"])
+        check("parallel: cleans title + excerpt", rows.first?.title == "Swift 6.2 Released" && rows.first?.snippet == "One two … three")
+        check("parallel: keeps date", rows.first?.date == "2025-09-15" && rows.last?.date == nil)
+        check("parallel: title falls back to url", rows.last?.title == "https://long.dev")
+        check("parallel: excerpt capped", (rows.last?.snippet.count ?? 0) <= 1200)
+        let asText: [String: Any] = ["content": [["type": "text", "text": #"{"results":[{"url":"https://t.dev","title":"T","excerpts":["e"]}]}"#]]]
+        check("parallel: result as text", (try? ParallelSearch.parse(asText))?.first?.url == "https://t.dev")
+        let many: [String: Any] = ["structuredContent": ["results": (0..<10).map { ["url": "https://x.dev/\($0)", "excerpts": ["e"]] }]]
+        check("parallel: at most 6", (try? ParallelSearch.parse(many))?.count == 6)
+        check("parallel: isError fails (rule 10)", (try? ParallelSearch.parse(["isError": true, "content": [["type": "text", "text": "quota"]]])) == nil)
+        check("parallel: junk fails", (try? ParallelSearch.parse(["content": [["type": "text", "text": "nope"]]])) == nil)
+        let args = ParallelSearch.arguments(query: "swift release", objective: nil, session: "s1")
+        check("parallel: sends only query, objective, session (must-NOT)", Set(args.keys) == ["objective", "search_queries", "session_id"])
+        check("parallel: objective defaults to the query", args["objective"] as? String == "swift release"
+              && args["search_queries"] as? [String] == ["swift release"])
+        check("parallel: objective used when given", ParallelSearch.arguments(query: "q", objective: " Find X ", session: "s")["objective"] as? String == "Find X")
+        check("search: text has date", ToolKit.searchText(rows).contains("https://swift.org/a · 2025-09-15"))
+
+        // Search order
+        typealias B = SearchEngine.Backend
+        check("search order: default", SearchEngine.order(choice: "parallel", keyed: []) == [B.parallel, .duckDuckGo])
+        check("search order: unknown → default", SearchEngine.order(choice: "bing", keyed: [.brave]) == [B.parallel, .duckDuckGo])
+        check("search order: brave with key", SearchEngine.order(choice: "brave", keyed: [.brave]) == [B.api(.brave), .parallel, .duckDuckGo])
+        check("search order: brave without key", SearchEngine.order(choice: "brave", keyed: [.tavily]) == [B.parallel, .duckDuckGo])
+        check("search order: DuckDuckGo never goes to Parallel (must-NOT)", SearchEngine.order(choice: "ddg", keyed: [.brave, .tavily]) == [B.duckDuckGo])
+
+        // MCP config
+        func ep(_ c: [String: Any]) -> MCPEndpoint? { try? MCPEndpoint.parse(c).get() }
+        check("mcp: command → stdio", ep(["command": "npx", "args": ["-y", "x"]]) == .stdio(command: "npx", args: ["-y", "x"], env: [:]))
+        check("mcp: url → http", ep(["url": "https://a.dev/mcp", "headers": ["Authorization": "Bearer k"]])
+              == .http(URL(string: "https://a.dev/mcp")!, headers: ["Authorization": "Bearer k"]))
+        check("mcp: type http + url", ep(["type": "http", "url": "https://a.dev/mcp"]) != nil)
+        check("mcp: http on localhost ok", ep(["url": "http://localhost:3000/mcp"]) != nil && ep(["url": "http://127.0.0.1:3000/mcp"]) != nil)
+        check("mcp: plain http elsewhere refused (must-NOT)", ep(["url": "http://a.dev/mcp"]) == nil && ep(["url": "http://localhost.evil.dev/mcp"]) == nil)
+        check("mcp: other schemes refused", ep(["url": "file:///etc/passwd"]) == nil && ep(["url": "ftp://a.dev"]) == nil)
+        check("mcp: old sse refused", ep(["type": "sse", "url": "https://a.dev/sse"]) == nil)
+        check("mcp: http type needs url", ep(["type": "http", "command": "x"]) == nil)
+        check("mcp: empty refused", ep([:]) == nil)
+
+        // JSON-RPC + event stream
+        if case .result(let id, let r) = MCPWire.classify(["jsonrpc": "2.0", "id": 3, "result": ["a": 1]]) {
+            check("mcp: result", id == 3 && r["a"] as? Int == 1)
+        } else { check("mcp: result", false) }
+        if case .error(let id, let m) = MCPWire.classify(["id": 4, "error": ["message": "bad"]]) { check("mcp: error", id == 4 && m == "bad") }
+        else { check("mcp: error", false) }
+        if case .serverRequest(_, let m) = MCPWire.classify(["id": "p1", "method": "ping"]) { check("mcp: server ping", m == "ping") }
+        else { check("mcp: server ping", false) }
+        if case .other = MCPWire.classify(["method": "notifications/progress"]) { check("mcp: notification ignored", true) }
+        else { check("mcp: notification ignored", false) }
+        check("mcp: ping answered", MCPWire.reply(id: "p1", method: "ping")["result"] != nil)
+        check("mcp: others refused", (MCPWire.reply(id: 1, method: "roots/list")["error"] as? [String: Any])?["code"] as? Int == -32601)
+        check("mcp: batch body", MCPWire.messages(#"[{"id":1,"result":{}},{"id":2,"result":{}}]"#).count == 2)
+        var sp = MCPStreamParser()
+        var got: [[String: Any]] = []
+        for line in ["event: message", #"data: {"method":"notifications/progress"}"#, "id: 7", #"data: {"jsonrpc":"2.0","#,
+                     #"data: "id":2,"result":{"ok":true}}"#, ": keep-alive", "data:{\"id\":3,\"result\":{}}"] {
+            got += sp.feed(line)
+        }
+        check("mcp: stream messages incl. split data lines", got.count == 3 && got[1]["id"] as? Int == 2 && got[2]["id"] as? Int == 3)
+        var sp2 = MCPStreamParser()
+        _ = sp2.feed(#"data: {"id":1,"#)
+        _ = sp2.feed("event: message")
+        check("mcp: stream drops a broken message", sp2.feed(#"data: {"id":5,"result":{}}"#).first?["id"] as? Int == 5)
+        let out = MCPServer.outcome(["content": [["type": "text", "text": "a"], ["type": "text", "text": "b"]], "isError": true])
+        check("mcp: tool error is failure", !out.ok && out.text == "a\nb")
+    }
+
+    /// Connector sign-in (OAuth) logic and connector routing — fixtures only.
+    private static func connectorsAndOAuth() {
+        let www = #"Bearer realm="OAuth", resource_metadata="https://mcp.notion.com/.well-known/oauth-protected-resource/mcp", error="invalid_token", scope=read"#
+        let p = MCPAuthLogic.challengeParams(www)
+        check("oauth: challenge params", p["resource_metadata"] == "https://mcp.notion.com/.well-known/oauth-protected-resource/mcp"
+              && p["realm"] == "OAuth" && p["scope"] == "read")
+        let server = URL(string: "https://mcp.notion.com/mcp")!
+        check("oauth: metadata candidates", MCPAuthLogic.resourceMetadataCandidates(server: server, header: www).map(\.absoluteString) == [
+            "https://mcp.notion.com/.well-known/oauth-protected-resource/mcp", "https://mcp.notion.com/.well-known/oauth-protected-resource"])
+        check("oauth: insecure resource_metadata ignored (must-NOT)",
+              !MCPAuthLogic.resourceMetadataCandidates(server: server, header: #"Bearer resource_metadata="http://evil.dev/x""#)
+                .contains { $0.host == "evil.dev" })
+        check("oauth: auth server candidates (path)", MCPAuthLogic.authServerCandidates(issuer: URL(string: "https://airtable.com/oauth2/v1")!).first?.absoluteString
+              == "https://airtable.com/.well-known/oauth-authorization-server/oauth2/v1")
+        check("oauth: auth server candidates (root)", MCPAuthLogic.authServerCandidates(issuer: URL(string: "https://mcp.linear.app/")!).map(\.absoluteString)
+              == ["https://mcp.linear.app/.well-known/oauth-authorization-server", "https://mcp.linear.app/.well-known/openid-configuration"])
+        check("oauth: only https endpoints (must-NOT)", MCPAuthLogic.secure("http://login.dev/auth") == nil
+              && MCPAuthLogic.secure("javascript:x") == nil && MCPAuthLogic.secure("https://login.dev/auth") != nil)
+        check("oauth: resource = server", MCPAuthLogic.resource(server: server, advertised: nil) == "https://mcp.notion.com/mcp")
+        check("oauth: resource from metadata", MCPAuthLogic.resource(server: URL(string: "https://a.dev/mcp/v1")!, advertised: "https://a.dev/mcp") == "https://a.dev/mcp")
+        check("oauth: another host's resource ignored (must-NOT)",
+              MCPAuthLogic.resource(server: server, advertised: "https://evil.dev/mcp") == "https://mcp.notion.com/mcp")
+        check("oauth: public client preferred", MCPAuthLogic.authMethod(supported: ["client_secret_basic", "none"]) == "none")
+        check("oauth: secret when required", MCPAuthLogic.authMethod(supported: ["client_secret_post", "client_secret_basic"]) == "client_secret_post")
+        check("oauth: scope from 401", MCPAuthLogic.scope(header: www, supported: ["a", "b"]) == "read")
+        check("oauth: scope from metadata", MCPAuthLogic.scope(header: nil, supported: ["a", "b"]) == "a b"
+              && MCPAuthLogic.scope(header: nil, supported: nil) == nil)
+        // S256 = base64url(SHA-256(verifier)), expected value computed independently (Python hashlib)
+        check("oauth: PKCE S256", MCPAuthLogic.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r7wW1gFWFOEjXk") == "bwWFMyPfdG9qreDhH2lmftFx_dFeLDalzcT1gb_j68g")
+        check("oauth: random tokens differ", MCPAuthLogic.randomToken() != MCPAuthLogic.randomToken() && MCPAuthLogic.randomToken().count >= 43)
+        let as1 = MCPAuthServer(authorizationEndpoint: URL(string: "https://login.dev/authorize?prompt=consent")!, tokenEndpoint: URL(string: "https://login.dev/token")!,
+                                registrationEndpoint: nil, authMethods: nil, resource: "https://mcp.dev/mcp", scope: "read write+x")
+        let link = MCPAuthLogic.authorizeURL(as1, clientID: "c1", redirect: "http://127.0.0.1:5000/callback", challenge: "ch", state: "st")
+        let q = Dictionary((URLComponents(url: link!, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { ($0.name, $0.value ?? "") },
+                           uniquingKeysWith: { a, _ in a })
+        check("oauth: authorize link", q["response_type"] == "code" && q["client_id"] == "c1" && q["code_challenge_method"] == "S256"
+              && q["state"] == "st" && q["resource"] == "https://mcp.dev/mcp" && q["prompt"] == "consent"
+              && q["redirect_uri"] == "http://127.0.0.1:5000/callback")
+        check("oauth: + in scope survives", link?.absoluteString.contains("write%2Bx") == true && q["scope"] == "read write+x")
+        check("oauth: callback code", (try? MCPAuthLogic.callbackCode(path: "/callback?code=abc&state=st", state: "st").get()) == "abc")
+        check("oauth: wrong state refused (must-NOT)", (try? MCPAuthLogic.callbackCode(path: "/callback?code=abc&state=other", state: "st").get()) == nil)
+        check("oauth: missing state refused (must-NOT)", (try? MCPAuthLogic.callbackCode(path: "/callback?code=abc", state: "st").get()) == nil)
+        check("oauth: denied", (try? MCPAuthLogic.callbackCode(path: "/callback?error=access_denied&state=st", state: "st").get()) == nil)
+        check("oauth: other paths ignored", (try? MCPAuthLogic.callbackCode(path: "/favicon.ico", state: "st").get()) == nil)
+        let base = MCPOAuthRecord(accessToken: "", refreshToken: "r0", expiresAt: nil, tokenEndpoint: "https://login.dev/token", clientID: "c1",
+                                  clientSecret: nil, authMethod: "none", resource: "https://mcp.dev/mcp", scope: nil)
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let rec = MCPAuthLogic.record(from: ["access_token": "a1", "expires_in": 3600], base: base, now: now)
+        check("oauth: refresh token kept when not rotated", rec?.accessToken == "a1" && rec?.refreshToken == "r0")
+        check("oauth: rotated refresh token", MCPAuthLogic.record(from: ["access_token": "a2", "refresh_token": "r1"], base: base)?.refreshToken == "r1")
+        check("oauth: no access token = no record", MCPAuthLogic.record(from: ["error": "invalid_grant"], base: base) == nil)
+        check("oauth: refresh timing", rec.map { !MCPAuthLogic.needsRefresh($0, now: now.addingTimeInterval(3000))
+            && MCPAuthLogic.needsRefresh($0, now: now.addingTimeInterval(3550)) } == true)
+        check("oauth: no expiry = no refresh", !MCPAuthLogic.needsRefresh(base))
+        let tokenURL = URL(string: "https://login.dev/token")!
+        let pub = MCPAuthLogic.tokenRequest(tokenURL, fields: ["grant_type": "refresh_token"], clientID: "c1", secret: nil, method: "none")
+        let pubBody = String(data: pub.httpBody ?? Data(), encoding: .utf8) ?? ""
+        check("oauth: public client sends id, no secret", pubBody.contains("client_id=c1") && !pubBody.contains("client_secret")
+              && pub.value(forHTTPHeaderField: "Authorization") == nil)
+        let post = MCPAuthLogic.tokenRequest(tokenURL, fields: [:], clientID: "c1", secret: "s&1", method: "client_secret_post")
+        check("oauth: secret in body, encoded", String(data: post.httpBody ?? Data(), encoding: .utf8)?.contains("client_secret=s%261") == true)
+        let basic = MCPAuthLogic.tokenRequest(tokenURL, fields: [:], clientID: "c1", secret: "s1", method: "client_secret_basic")
+        check("oauth: basic auth header", basic.value(forHTTPHeaderField: "Authorization") == "Basic " + Data("c1:s1".utf8).base64EncodedString()
+              && !(String(data: basic.httpBody ?? Data(), encoding: .utf8) ?? "").contains("s1"))
+        check("oauth: form encoding", MCPAuthLogic.formEncode(["b": "x y", "a": "1+1"]) == "a=1%2B1&b=x%20y")
+
+        // Catalog + names
+        check("connectors: catalog is https + unique", Set(ConnectorCatalog.all.map(\.id)).count == ConnectorCatalog.all.count
+              && ConnectorCatalog.all.allSatisfy { URL(string: $0.url).map(MCPEndpoint.allowed) == true })
+        check("connectors: name from url", ConnectorCatalog.serverName(for: URL(string: "https://mcp.acme.io/mcp")!, existing: []) == "acme")
+        check("connectors: unique name", ConnectorCatalog.serverName(for: URL(string: "https://mcp.acme.io/mcp")!, existing: ["acme"]) == "acme-2")
+        check("connectors: name for bare host", ConnectorCatalog.serverName(for: URL(string: "http://localhost:3000/mcp")!, existing: []) == "localhost")
+
+        // Routing of connector tools
+        func cfg(_ id: String) -> [String: Any] {
+            let c = ConnectorCatalog.all.first { $0.id == id }
+            return ["url": c?.url ?? "", "keywords": c?.keywords ?? []]
+        }
+        let notionTool = AgentTool(name: "mcp__notion__search", description: "", schema: Schema.object([:]), risk: .read, verb: "", detail: { _ in "" },
+                                   preview: { _ in "" }, run: { _ in .fail("x") })
+        let mondayTool = AgentTool(name: "mcp__monday__items", description: "", schema: Schema.object([:]), risk: .read, verb: "", detail: { _ in "" },
+                                   preview: { _ in "" }, run: { _ in .fail("x") })
+        let pool = ToolKit.all() + [notionTool, mondayTool]
+        let conns = [MCPManager.group(server: "notion", config: cfg("notion"), tools: [notionTool.name]),
+                     MCPManager.group(server: "monday", config: cfg("monday"), tools: [mondayTool.name])]
+        func routed(_ text: String, _ c: [ToolRouter.Group] = conns) -> Set<String> {
+            Set(ToolRouter.select(pool, conversation: [ChatMessage(role: .user, text: text)], connectors: c).map(\.name))
+        }
+        check("connectors: tools not sent when unrelated (must-NOT)", !routed("what's the weather").contains(notionTool.name))
+        check("connectors: named service routes", routed("add this to my Notion page").contains(notionTool.name))
+        check("connectors: weekday isn't monday.com (must-NOT)", !routed("what's on monday?").contains(mondayTool.name))
+        check("connectors: monday.com routes", routed("create an item on my monday.com board").contains(mondayTool.name))
+        check("connectors: more_tools loads one", Set(ToolRouter.select(pool, conversation: [ChatMessage(role: .user, text: "hi")], extra: ["notion"],
+                                                                       connectors: conns).map(\.name)).contains(notionTool.name))
+        check("connectors: routing always", routed("hi", [MCPManager.group(server: "fs", config: ["routing": "always"], tools: [notionTool.name])])
+              .contains(notionTool.name))
+        check("connectors: default keyword is the name", routed("search google drive", [MCPManager.group(server: "google-drive", config: [:],
+                                                                                                         tools: [notionTool.name])]).contains(notionTool.name))
+        let more = ToolRouter.moreTools(connectors: conns)
+        check("connectors: more_tools lists them", more.description.contains("notion (1 tools)"))
+    }
+
+    /// Puff's chat entrances, greetings, toss physics (pure).
+    private static func entrances() {
+        let all: [Entrance] = [.umbrella, .rope, .portal, .bungee, .roll, .soft, .appear, .meteor, .lightning, .jetpack, .teleport, .spinDash]
+        for e in all {
+            let end = EntranceLogic.frame(e, t: EntranceLogic.duration(e), drop: 120, size: 70, width: 320)
+            check("entrance \(e.rawValue): ends on the floor, upright, visible",
+                  abs(end.feet) < 0.5 && abs(end.dx) < 0.5 && abs(end.spin) < 0.01 && end.opacity > 0.99 && abs(end.scale - 1) < 0.01
+                  && end.umbrella < 0.01 && end.ropeEnd == nil && end.ring < 0.01 && end.flame < 0.01 && end.beam < 0.01 && end.dark < 0.01)
+            var ok = true
+            for i in 0...60 {
+                let f = EntranceLogic.frame(e, t: EntranceLogic.duration(e) * Double(i) / 60, drop: 120, size: 70, width: 320)
+                if f.feet < -0.5 || f.feet > 121 || !f.feet.isFinite || f.opacity < 0 || f.opacity > 1 || abs(f.dx) > 320 { ok = false }
+            }
+            check("entrance \(e.rawValue): stays in the stage", ok)
+            if let td = EntranceLogic.touchdown(e) { check("entrance \(e.rawValue): touchdown in time", td > 0 && td < EntranceLogic.duration(e)) }
+        }
+        check("entrance: starts above the stage", EntranceLogic.frame(.umbrella, t: 0, drop: 120, size: 70, width: 320).feet == 120
+              && EntranceLogic.frame(.rope, t: 0, drop: 120, size: 70, width: 320).feet == 120)
+        check("entrance: roll comes from its side", EntranceLogic.frame(.roll, t: 0.1, drop: 120, size: 70, width: 320, side: 1).dx < 0
+              && EntranceLogic.frame(.roll, t: 0.1, drop: 120, size: 70, width: 320, side: -1).dx > 0)
+        check("entrance: portal hidden before the ring opens", EntranceLogic.frame(.portal, t: 0.1, drop: 120, size: 70, width: 320).opacity == 0)
+        check("entrance: reduce motion fades", EntranceLogic.pick(liveliness: .lively, reduceMotion: true, last: nil, roll: 0.5) == .appear)
+        check("entrance: calm is soft", EntranceLogic.pick(liveliness: .calm, reduceMotion: false, last: nil, roll: 0.5) == .soft)
+        var seen: Set<Entrance> = []
+        var repeats = false
+        for i in 0..<200 {
+            let r = Double(i) / 200
+            for last in Entrance.allCases {
+                let e = EntranceLogic.pick(liveliness: .lively, reduceMotion: false, last: last, roll: r)
+                if e == last { repeats = true }
+                seen.insert(e)
+            }
+        }
+        check("entrance: never the same twice in a row", !repeats)
+        check("entrance: lively uses the six hero shots", seen == [.slam, .meteor, .lightning, .jetpack, .teleport, .spinDash])
+        var friendly: Set<Entrance> = []
+        for i in 0..<200 { friendly.insert(EntranceLogic.pick(liveliness: .friendly, reduceMotion: false, last: nil, roll: Double(i) / 200)) }
+        check("entrance: friendly stays gentle", friendly.isSubset(of: [.slam, .umbrella, .rope, .portal, .bungee, .roll]) && friendly.count >= 5)
+        check("entrance: hero cues in order and in time", Entrance.allCases.allSatisfy { e in
+            let c = EntranceLogic.cues(e).map(\.at)
+            return c == c.sorted() && c.allSatisfy { $0 > 0 && $0 < EntranceLogic.duration(e) } })
+        check("entrance: slow-mo only just before impact", EntranceLogic.timeScale(.meteor, t: 0.5) < 1
+              && EntranceLogic.timeScale(.meteor, t: 0.2) == 1 && EntranceLogic.timeScale(.meteor, t: 0.6) == 1
+              && EntranceLogic.timeScale(.umbrella, t: 1.8) == 1)
+
+        // Greetings
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
+        func at(_ y: Int, _ m: Int, _ d: Int, _ h: Int) -> Date { cal.date(from: DateComponents(year: y, month: m, day: d, hour: h))! }
+        let tue9 = at(2026, 10, 6, 9)                                     // a Tuesday
+        check("greet: morning", GreetingLogic.greeting(now: tue9, calendar: cal, lastLanding: nil, roll: 0).line.contains("morning"))
+        check("greet: early yawn", GreetingLogic.greeting(now: at(2026, 10, 6, 6), calendar: cal, lastLanding: nil, roll: 0).first == .yawn)
+        check("greet: night", GreetingLogic.greeting(now: at(2026, 10, 6, 23), calendar: cal, lastLanding: nil, roll: 0).line.contains("late"))
+        check("greet: friday afternoon party", GreetingLogic.greeting(now: at(2026, 10, 9, 16), calendar: cal, lastLanding: nil, roll: 0).party)
+        check("greet: monday", GreetingLogic.greeting(now: at(2026, 10, 5, 9), calendar: cal, lastLanding: nil, roll: 0).line.contains("week"))
+        check("greet: again soon", GreetingLogic.greeting(now: tue9, calendar: cal, lastLanding: tue9.addingTimeInterval(-120), roll: 0).first == .hop)
+        check("greet: missed you", GreetingLogic.greeting(now: tue9, calendar: cal, lastLanding: tue9.addingTimeInterval(-5 * 86_400), roll: 0)
+              .expression == .love)
+        check("greet: afternoon lines in range", (0...10).allSatisfy {
+            !GreetingLogic.greeting(now: at(2026, 10, 6, 14), calendar: cal, lastLanding: nil, roll: Double($0) / 10).line.isEmpty })
+
+        // Toss
+        var st = TossState(x: 100, y: 60, vx: 900, vy: 400)
+        var hits = 0, inside = true
+        for _ in 0..<600 {
+            let (n, hit) = TossLogic.step(st, dt: 1.0 / 60, minX: 40, maxX: 280, floor: 6, ceiling: 100, radius: 30)
+            st = n
+            if hit != nil { hits += 1 }
+            if n.x < 40 || n.x > 280 || n.y < 6 || n.y > 100 { inside = false }
+        }
+        check("toss: stays inside the stage", inside)
+        check("toss: bounces, then settles", hits >= 2 && TossLogic.settled(st, floor: 6))
+        let (cvx, cvy) = TossLogic.clampVelocity(3000, 4000)
+        check("toss: speed capped", abs((cvx * cvx + cvy * cvy).squareRoot() - TossLogic.maxSpeed) < 0.01)
+        // Looks
+        check("look: original is the classic Puff", PuffLook.original.id == "blob/sprout/jelly" && PuffLook(id: "") == .original)
+        let lk = PuffLook(shape: .star, accessory: .scarf, finish: .plush)
+        check("look: round trip", PuffLook(id: lk.id) == lk)
+        check("look: unknown parts fall back", PuffLook(id: "hexagon/jetpack/chrome") == .original
+              && PuffLook(id: "kitty").shape == .kitty && PuffLook(id: "kitty").accessory == .sprout)
+        var seq = 0
+        check("look: surprise differs", PuffLook.surprise(not: .original) { _ in 0 } != .original
+              && PuffLook.surprise(not: lk) { n in seq += 1; return seq % n } != lk)
+        check("look: every shape draws a closed body", PuffShape.allCases.allSatisfy {
+            let b = PuffDraw.bodyPath($0, in: CGRect(x: 0, y: 0, width: 80, height: 70)).boundingRect
+            // A ghost's rippling hem may dip a little below its box (it floats; no feet).
+            return b.width > 40 && b.height > 40 && b.maxY <= ($0 == .ghost ? 73 : 70.5) })
+        func box(_ sh: PuffShape) -> (CGRect, CGFloat) {
+            let s: CGFloat = 100, w = s * 0.8 * sh.scale.w
+            return (CGRect(x: s / 2 - w / 2, y: 0, width: w, height: 60), w)
+        }
+        let (kb, kw) = box(.kitty), (db, dw) = box(.dino)
+        check("look: tails stay inside the sprite frame", kb.maxX + kw * 0.2 < 100 && db.minX - dw * 0.27 > 0)
+        check("gaze: follows the pointer", GazeLogic.toward(dx: 80) == 1 && GazeLogic.toward(dx: -80) == -1 && GazeLogic.toward(dx: 10) == 0)
+    }
+
+    /// Shortcuts, screen text and Spotlight search (pure parts + routing + approvals).
+    private static func macTools() {
+        let list = ["Morning Routine", "Do Not Disturb On", "Send ETA"]
+        check("shortcuts: exact name", MacToolLogic.shortcut(named: "Send ETA", in: list) == "Send ETA")
+        check("shortcuts: case-insensitive", MacToolLogic.shortcut(named: " morning routine ", in: list) == "Morning Routine")
+        check("shortcuts: unknown refused (must-NOT)", MacToolLogic.shortcut(named: "Delete Everything", in: list) == nil
+              && MacToolLogic.shortcut(named: "Morning", in: list) == nil)
+        check("shortcuts: flags refused (must-NOT)", MacToolLogic.shortcut(named: "--help", in: ["--help"]) == nil)
+        check("shortcuts: allow per shortcut, not all", TurnPolicy.allowKey(tool: "shortcuts_run", args: ["name": "Send ETA"]) == "shortcut:send eta"
+              && !TurnPolicy.isAllowed(tool: "shortcuts_run", args: ["name": "Morning Routine"], allowed: ["shortcut:send eta"])
+              && TurnPolicy.allowKey(tool: "shortcuts_run", args: [:]) == nil)
+        check("shortcuts: output is fenced", TurnPolicy.isExternal("shortcuts_run") && TurnPolicy.isExternal("screen_text"))
+        check("shortcuts: run needs approval", MacTools.shortcutsRun.risk == .confirm && MacTools.shortcutsList.risk == .read)
+
+        typealias K = MacToolLogic.Kind
+        let q1 = MacToolLogic.spotlightQuery(text: "invoice", kind: .pdf, person: "Sarah", days: 7) ?? ""
+        check("spotlight: text, person, kind, date", q1.contains("kMDItemTextContent == \"invoice\"cdw") && q1.contains("kMDItemAuthors == \"*Sarah*\"cd")
+              && q1.contains("com.adobe.pdf") && q1.contains("$time.today(-7)") && q1.components(separatedBy: " && ").count == 4)
+        check("spotlight: kind alone is a query", MacToolLogic.spotlightQuery(text: nil, kind: .presentation, person: nil, days: nil)?.contains("public.presentation") == true)
+        check("spotlight: nothing → nil", MacToolLogic.spotlightQuery(text: "  ", kind: .any, person: nil, days: nil) == nil)
+        let evil = MacToolLogic.spotlightQuery(text: "a\" || kMDItemFSName == \"*", kind: .any, person: nil, days: nil) ?? ""
+        check("spotlight: quotes can't break out (must-NOT)", !evil.contains("\" || kMDItemFSName") && evil.filter { $0 == "\"" }.count % 2 == 0)
+        check("spotlight: days capped", MacToolLogic.spotlightQuery(text: nil, kind: .any, person: nil, days: 99999)?.contains("-3650") == true)
+        check("spotlight: hides internals", !MacToolLogic.keep("/Users/x/Library/Caches/a.pdf", kind: .pdf) && !MacToolLogic.keep("/Users/x/.git/a", kind: .any)
+              && MacToolLogic.keep("/Users/x/Documents/a.pdf", kind: .pdf) && MacToolLogic.keep("/Users/x/Library/Mail/V10/a.emlx", kind: .email)
+              && !MacToolLogic.keep("/Users/x/Library/Mail/V10/a.emlx", kind: .pdf))
+        check("spotlight: every kind maps", K.allCases.allSatisfy { $0 == .any || !$0.types.isEmpty })
+
+        check("screen: password apps never read (must-NOT)", ["com.1password.1password", "com.apple.keychainaccess", "com.apple.Passwords",
+                                                             "com.bitwarden.desktop"].allSatisfy(MacToolLogic.privateApps.contains))
+        check("screen: secure fields never read (must-NOT)", MacToolLogic.secret(role: "AXSecureTextField", subrole: nil)
+              && MacToolLogic.secret(role: "AXTextField", subrole: "AXSecureTextField") && !MacToolLogic.secret(role: "AXTextField", subrole: nil))
+        check("screen: text roles", MacToolLogic.readable(role: "AXStaticText") && !MacToolLogic.readable(role: "AXImage"))
+        check("screen: lines joined, deduped, capped", MacToolLogic.joinLines([" a ", "a", "", "b"]) == "a\nb"
+              && MacToolLogic.joinLines(Array(repeating: "xxxxxxxxxx", count: 5000).enumerated().map { "\($0.offset)" + $0.element }, cap: 100).count <= 100)
+
+        let pool = ToolKit.all() + DailyTools.all() + MacTools.all()
+        func routed(_ t: String) -> Set<String> { Set(ToolRouter.select(pool, conversation: [ChatMessage(role: .user, text: t)]).map(\.name)) }
+        check("route: shortcuts", routed("run my morning routine shortcut").contains("shortcuts_run"))
+        check("route: screen", routed("summarize this email").contains("screen_text") && routed("what am I looking at?").contains("screen_text"))
+        check("route: find", routed("find the PDF Sarah sent me last week").contains("spotlight_search"))
+        check("route: not for small talk (must-NOT)", routed("hi, how are you?").isDisjoint(with: ["shortcuts_run", "screen_text", "spotlight_search"]))
+    }
+
+    /// Routines: names, the typed-name fast path (must-NOTs), links, the shortcut file, the store.
+    private static func routines() {
+        func r(_ name: String) -> Routine { Routine(id: name.prefix(4).lowercased(), name: name, steps: "s", key: "k", created: Date()) }
+        let list = [r("Start work"), r("Wrap up"), r("play focus music")]
+        check("routine: exact name", RoutineLogic.match("start work", in: list)?.name == "Start work")
+        check("routine: punctuation/please", RoutineLogic.match("Start work, please!", in: list)?.name == "Start work")
+        check("routine: run my … routine", RoutineLogic.match("run my wrap up routine", in: list)?.name == "Wrap up"
+              && RoutineLogic.match("start the routine start work", in: list)?.name == "Start work")
+        check("routine: wins over music", RoutineLogic.match("play focus music", in: list)?.name == "play focus music")
+        check("routine: longer messages aren't routines (must-NOT)", RoutineLogic.match("how do I start work earlier tomorrow?", in: list) == nil
+              && RoutineLogic.match("start work on the report", in: list) == nil && RoutineLogic.match("wrap", in: list) == nil)
+        check("routine: no routines, no match", RoutineLogic.match("start work", in: []) == nil)
+        check("routine: names", RoutineLogic.cleanName("  “Start   work” ") == "Start work" && RoutineLogic.cleanName("123") == nil
+              && RoutineLogic.cleanName(String(repeating: "a", count: 41)) == nil)
+        check("routine: expansion has the steps", RoutineLogic.expansion(Routine(id: "a", name: "N", steps: "open Linear", key: "k", created: Date()))
+            .contains("open Linear"))
+        let rt = Routine(id: "ab12cd34", name: "Start work", steps: "s", key: "SeCrEt_-1", created: Date())
+        let link = RoutineLogic.url(for: rt)
+        check("routine: link round trip", link.flatMap(RoutineLogic.parse).map { $0.id == "ab12cd34" && $0.key == "SeCrEt_-1" } == true)
+        check("routine: wrong key refused (must-NOT)", !RoutineLogic.keyMatches("guess", rt.key) && !RoutineLogic.keyMatches("", "")
+              && RoutineLogic.keyMatches("SeCrEt_-1", rt.key))
+        check("routine: other links ignored", RoutineLogic.parse(URL(string: "opennotch://desktop/index.html")!) == nil
+              && RoutineLogic.parse(URL(string: "opennotch://routine/ab12cd34")!) == nil
+              && RoutineLogic.parse(URL(string: "https://routine/ab?key=x")!) == nil)
+        check("routine: keys are random and long", RoutineLogic.newKey() != RoutineLogic.newKey() && RoutineLogic.newKey().count >= 20)
+        let plist = RoutineLogic.shortcutPlist(url: link!)
+        let acts = plist["WFWorkflowActions"] as? [[String: Any]] ?? []
+        check("routine: shortcut = URL then Open URLs", acts.count == 2
+              && acts[0]["WFWorkflowActionIdentifier"] as? String == "is.workflow.actions.url"
+              && (acts[0]["WFWorkflowActionParameters"] as? [String: Any])?["WFURLActionURL"] as? String == link!.absoluteString
+              && acts[1]["WFWorkflowActionIdentifier"] as? String == "is.workflow.actions.openurl"
+              && PropertyListSerialization.propertyList(plist, isValidFor: .binary))
+        check("routine: safe file name", RoutineLogic.fileName("a/b:c") == "a-b-c.shortcut" && RoutineLogic.fileName("  ") == "Routine.shortcut")
+        let path = NSTemporaryDirectory() + "routines-check-\(UUID().uuidString).json"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = RoutineStore(path: path)
+        let a = store.save(name: "Start work", steps: "one")
+        let b = store.save(name: "start work", steps: "two")
+        check("routine store: same name replaces, keeps id + key", a.id == b.id && a.key == b.key && store.all().count == 1 && store.all()[0].steps == "two")
+        check("routine store: persists", RoutineStore(path: path).find("START WORK")?.steps == "two")
+        check("routine store: delete", store.delete(a.id) && store.all().isEmpty)
+        check("routine: save/delete/export need approval", RoutineTools.save.risk == .confirm && RoutineTools.delete.risk == .confirm
+              && RoutineTools.export.risk == .confirm && RoutineTools.run.risk == .read)
+        let pool = ToolKit.all() + RoutineTools.all()
+        func routed(_ t: String) -> Set<String> { Set(ToolRouter.select(pool, conversation: [ChatMessage(role: .user, text: t)]).map(\.name)) }
+        check("route: routines", routed("every time I say start work, open Linear").contains("routine_save")
+              && routed("add it to Apple Shortcuts").contains("routine_export_shortcut"))
     }
 
     static func run() async -> Int32 {
@@ -454,6 +831,11 @@ enum AgentChecks {
 
         turnPolicy()
         recallAndMore()
+        webSearchAndMCP()
+        connectorsAndOAuth()
+        entrances()
+        macTools()
+        routines()
         presence()
         uxPolish()
 

@@ -280,8 +280,10 @@ enum ToolKit {
             run: { a in await fetchURL(a) }),
         AgentTool(
             name: "web_search",
-            description: "Search the web. Returns titles, links and snippets — then fetch_url the best ones.",
-            schema: Schema.object(["query": Schema.string("Search query")], required: ["query"]),
+            description: "Search the web. Returns titles, links, dates and excerpts that usually answer the question — fetch_url a link only when you need the whole page.",
+            schema: Schema.object(["query": Schema.string("Search query, 3–6 keywords"),
+                                   "objective": Schema.string("Optional: what you want to find out, in one sentence (focuses the excerpts)")],
+                                  required: ["query"]),
             risk: .read, verb: "Searching the web", detail: { $0.str("query") ?? "" }, preview: { $0.str("query") ?? "" },
             run: { a in await webSearch(a) }),
     ]
@@ -361,17 +363,38 @@ enum ToolKit {
 
     static func webSearch(_ a: ToolArgs) async -> ToolOutcome {
         guard let q = a.str("query") else { return .fail("query is required") }
-        // A search API the user added a key for, else DuckDuckGo (also the fallback if the API fails).
-        if let engine = SearchEngine.active, let key = engine.key {
-            switch await engine.search(q, key: key) {
-            case .success(let rows) where !rows.isEmpty:
-                return ToolOutcome(ok: true, text: rows.prefix(8).enumerated().map { i, r in
-                    "\(i + 1). \(r.title)\n   \(r.url)\n   \(r.snippet)"
-                }.joined(separator: "\n"))
-            case .failure(let e): AppLog.write("web_search via \(engine.label) failed: \(e.localizedDescription)")
-            default: break
+        // Parallel by default, a keyed API if the user picked one, DuckDuckGo last; each failure falls through.
+        let keyed = Set(SearchEngine.allCases.filter { $0.key != nil })
+        for backend in SearchEngine.order(choice: SearchEngine.choice, keyed: keyed) {
+            let result: Result<[SearchEngine.Row], Error>
+            let label: String
+            switch backend {
+            case .api(let engine):
+                guard let key = engine.key else { continue }
+                label = engine.label
+                result = await engine.search(q, key: key)
+            case .parallel:
+                label = "Parallel"
+                result = await ParallelSearch.shared.search(q, objective: a.str("objective"))
+            case .duckDuckGo:
+                return await duckDuckGo(q)
+            }
+            switch result {
+            case .success(let rows) where !rows.isEmpty: return ToolOutcome(ok: true, text: searchText(rows))
+            case .success: AppLog.write("web_search via \(label): no results")
+            case .failure(let e): AppLog.write("web_search via \(label) failed: \(e.localizedDescription)")
             }
         }
+        return .fail("Web search returned nothing usable — try a different query, or fetch_url a site directly.")
+    }
+
+    static func searchText(_ rows: [SearchEngine.Row]) -> String {
+        rows.prefix(8).enumerated().map { i, r in
+            "\(i + 1). \(r.title)\n   \(r.url)\(r.date.map { " · \($0)" } ?? "")\n   \(r.snippet)"
+        }.joined(separator: "\n")
+    }
+
+    static func duckDuckGo(_ q: String) async -> ToolOutcome {
         var c = URLComponents(string: "https://html.duckduckgo.com/html/")!
         c.queryItems = [URLQueryItem(name: "q", value: q)]
         var req = URLRequest(url: c.url!)
@@ -382,9 +405,7 @@ enum ToolKit {
         }
         let results = parseDuckDuckGo(html)
         if results.isEmpty { return .fail("Web search returned nothing usable — try a different query, or fetch_url a site directly.") }
-        return ToolOutcome(ok: true, text: results.prefix(8).enumerated().map { i, r in
-            "\(i + 1). \(r.title)\n   \(r.url)\n   \(r.snippet)"
-        }.joined(separator: "\n"))
+        return ToolOutcome(ok: true, text: searchText(results.map { .init(title: $0.title, url: $0.url, snippet: $0.snippet) }))
     }
 
     static func parseDuckDuckGo(_ html: String) -> [(title: String, url: String, snippet: String)] {

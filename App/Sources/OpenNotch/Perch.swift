@@ -212,6 +212,8 @@ final class PerchSprites {
         var mood: AvatarMood
         var expression: PuffExpression?
         var palette: String
+        /// Puff's body/accessory/finish (PuffLook.id) — part of the key, so a new look renders fresh frames.
+        var look: String = PuffLook.currentID
     }
 
     static let fps = 12.0
@@ -248,7 +250,8 @@ final class PerchSprites {
         }
         let view = PuffCanvas(size: size, mood: pose.mood ?? k.mood, palette: AvatarPalette.named(k.palette), t: t,
                               gaze: pose.gaze ?? CGPoint(x: Double(k.gazeX) * 0.75, y: 0.1),
-                              phys: PuffPhysics(expression: k.expression), limbs: pose.limbs, blink: k.blink ? true : nil)
+                              phys: PuffPhysics(expression: k.expression), limbs: pose.limbs, blink: k.blink ? true : nil,
+                              outfit: PuffLook(id: k.look))
             .frame(width: size, height: size)
         let r = ImageRenderer(content: view)
         r.scale = scale

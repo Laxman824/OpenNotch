@@ -48,7 +48,11 @@ final class AgentCore {
         emitStatus()
     }
 
-    var tools: [AgentTool] { ToolKit.all() + DailyTools.all() + RecallTools.all() + [ToolRouter.moreTools] + MCPManager.shared.tools }
+    var tools: [AgentTool] {
+        ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all() + RoutineTools.all()
+            + [ToolRouter.moreTools(connectors: MCPManager.shared.groups)]
+            + MCPManager.shared.tools
+    }
 
     /// Evals: these tools (and every approval tool) report success without running.
     var pretendTools: Set<String> = []
@@ -78,15 +82,20 @@ final class AgentCore {
     // MARK: turns
 
     func send(_ text: String, display: String?) {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         guard !busy else {
             emit?(["type": "info", "text": "Still working on the last message — press Stop first."])
             return
         }
         let typed = t.components(separatedBy: Self.contextMarker).first ?? t
-        // "pause", "next song", "volume 40": instant, no model needed.
-        if let cmd = MediaIntent.parse(typed, assistantName: UserDefaults.standard.string(forKey: "assistantName") ?? "Ledge") {
+        // A routine's name (or "run <name>"): the model gets its steps. Before music, so a routine
+        // called "play focus music" is the user's routine, not a song search.
+        if let r = RoutineLogic.match(typed, in: RoutineStore.shared.all()) {
+            RoutineStore.shared.markRun(r.id)
+            t = RoutineLogic.expansion(r) + String(t.dropFirst(typed.count))
+        } else if let cmd = MediaIntent.parse(typed, assistantName: UserDefaults.standard.string(forKey: "assistantName") ?? "Ledge") {
+            // "pause", "next song", "volume 40": instant, no model needed.
             runMedia(cmd, typed: typed, display: display)
             return
         }
@@ -104,7 +113,8 @@ final class AgentCore {
         let provider = self.provider
         let allTools = provider.supportsTools && provider.isConnected ? self.tools : []
         var extraGroups: Set<String> = []
-        var tools = ToolRouter.select(allTools, conversation: conversation)
+        let connectors = MCPManager.shared.groups
+        var tools = ToolRouter.select(allTools, conversation: conversation, connectors: connectors)
         var specs = tools.map(\.spec)
         var toolCalls = 0
         var repeats: [String: Int] = [:]
@@ -210,7 +220,7 @@ final class AgentCore {
                     outcome = await execute(tool, call)
                     if call.name == "more_tools" && outcome.ok {
                         extraGroups.formUnion(ToolArgs(json: call.arguments).dict["groups"] as? [String] ?? [])
-                        tools = ToolRouter.select(allTools, conversation: conversation, extra: extraGroups)
+                        tools = ToolRouter.select(allTools, conversation: conversation, extra: extraGroups, connectors: connectors)
                         specs = tools.map(\.spec)
                     }
                 } else {
@@ -566,7 +576,12 @@ final class AgentCore {
         read the web and the page the user is looking at, read their Mail.app inbox, draft replies and \
         send email (only when the user asks to send; they approve every email), search and create Apple Notes, look up contacts, check the calendar, reminders and weather, \
         schedule prompts to run later (e.g. a weekday morning brief), control music, take a screenshot, set \
-        timers, keep notes and remember facts. If a tool you need isn't loaded, call more_tools.
+        timers, keep notes and remember facts. You can also read the window the user is looking at (screen_text — for \
+        "this"), search their whole Mac by content, person, kind and date (spotlight_search), and run their Shortcuts \
+        (shortcuts_list, shortcuts_run — these reach actions inside other apps: check them before saying you can't). \
+        When the user wants a repeatable job ("every time I say …", "save this as …"), save it as a routine (routine_save); \
+        offer to add it to Apple Shortcuts (routine_export_shortcut). \
+        If a tool you need isn't loaded, call more_tools.
 
         How to work:
         - Answers appear in a small panel: be brief and direct. Markdown is fine; prefer short paragraphs and lists.

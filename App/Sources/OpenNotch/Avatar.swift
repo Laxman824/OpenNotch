@@ -39,7 +39,139 @@ struct AvatarPalette: Identifiable, Equatable {
                       eye: Color.white),
     ]
 
-    static func named(_ id: String) -> AvatarPalette { all.first { $0.id == id } ?? all[0] }
+    static func named(_ id: String) -> AvatarPalette {
+        if let c = PaletteCode.decode(id) {
+            return AvatarPalette(id: id, name: "Custom", head: [PaletteCode.color(c.top), PaletteCode.color(c.bottom)],
+                                 eye: PaletteCode.color(c.eye))
+        }
+        return all.first { $0.id == id } ?? all[0]
+    }
+}
+
+/// Custom Puff colours live in the same `avatarPalette` string as the presets, so every Puff
+/// (perch, chat, onboarding, header, sprites' cache keys) picks them up with no extra plumbing:
+/// "custom:RRGGBB-RRGGBB-RRGGBB" = body top, body bottom, eye glow. Pure (checked).
+enum PaletteCode {
+    struct Colors: Equatable { var top: UInt32; var bottom: UInt32; var eye: UInt32 }
+
+    static func encode(_ c: Colors) -> String {
+        "custom:" + [c.top, c.bottom, c.eye].map { String(format: "%06X", $0 & 0xFFFFFF) }.joined(separator: "-")
+    }
+
+    static func decode(_ id: String) -> Colors? {
+        guard id.hasPrefix("custom:") else { return nil }
+        let parts = id.dropFirst(7).split(separator: "-")
+        guard parts.count == 3 else { return nil }
+        let v = parts.compactMap { $0.count == 6 ? UInt32($0, radix: 16) : nil }
+        return v.count == 3 ? Colors(top: v[0], bottom: v[1], eye: v[2]) : nil
+    }
+
+    static func color(_ rgb: UInt32) -> Color {
+        Color(red: Double(rgb >> 16 & 0xFF) / 255, green: Double(rgb >> 8 & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255)
+    }
+
+    static func rgb(_ c: Color) -> UInt32 {
+        guard let n = NSColor(c).usingColorSpace(.sRGB) else { return 0x8080FF }
+        let f = { (x: CGFloat) in UInt32(max(0, min(255, (x * 255).rounded()))) }
+        return f(n.redComponent) << 16 | f(n.greenComponent) << 8 | f(n.blueComponent)
+    }
+
+    static func rgb(h: Double, s: Double, b: Double) -> UInt32 {
+        let hue = h - floor(h)
+        let i = Int(hue * 6) % 6, f = hue * 6 - floor(hue * 6)
+        let p = b * (1 - s), q = b * (1 - f * s), t = b * (1 - (1 - f) * s)
+        let (r, g, bl): (Double, Double, Double) = [(b, t, p), (q, b, p), (p, b, t), (p, q, b), (t, p, b), (b, p, q)][i]
+        let u = { (x: Double) in UInt32(max(0, min(255, (x * 255).rounded()))) }
+        return u(r) << 16 | u(g) << 8 | u(bl)
+    }
+
+    /// A pleasing random palette: a bright body that drifts a little in hue, eyes on the opposite side.
+    static func surprise(hue: Double) -> Colors {
+        Colors(top: rgb(h: hue, s: 0.55, b: 1.0), bottom: rgb(h: hue + 0.1, s: 0.75, b: 0.9), eye: rgb(h: hue + 0.5, s: 0.3, b: 1.0))
+    }
+
+    /// The colours behind any palette id (to start a custom one from the current look).
+    static func colors(of id: String) -> Colors {
+        if let c = decode(id) { return c }
+        let p = AvatarPalette.named(id)
+        return Colors(top: rgb(p.head.first ?? .purple), bottom: rgb(p.head.last ?? .pink), eye: rgb(p.eye))
+    }
+}
+
+/// Pick Puff's colours: presets, a custom trio, or "Surprise me". Used by onboarding and Settings.
+struct PuffColorPicker: View {
+    @AppStorage("avatarPalette") private var palette = "aurora"
+    @State private var showCustom = false
+    var onPick: (() -> Void)? = nil
+
+    private var isCustom: Bool { PaletteCode.decode(palette) != nil }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                ForEach(AvatarPalette.all) { p in
+                    swatch(p, selected: palette == p.id) { palette = p.id; showCustom = false; onPick?() }
+                }
+                swatch(AvatarPalette.named(isCustom ? palette : PaletteCode.encode(PaletteCode.colors(of: palette))),
+                       selected: isCustom || showCustom, label: "Custom", symbol: "paintpalette.fill") {
+                    if !isCustom { palette = PaletteCode.encode(PaletteCode.colors(of: palette)) }
+                    showCustom = true
+                    onPick?()
+                }
+                swatch(nil, selected: false, label: "Surprise", symbol: "dice.fill") {
+                    palette = PaletteCode.encode(PaletteCode.surprise(hue: Double.random(in: 0..<1)))
+                    showCustom = true
+                    onPick?()
+                }
+            }
+            if isCustom && showCustom {
+                HStack(spacing: 18) {
+                    picker("Body", \.top)
+                    picker("Fade", \.bottom)
+                    picker("Eyes", \.eye)
+                }
+                .font(.system(size: 11.5, weight: .medium))
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.spring(duration: 0.3), value: showCustom)
+        .onAppear { showCustom = isCustom }
+    }
+
+    private func picker(_ title: String, _ key: WritableKeyPath<PaletteCode.Colors, UInt32>) -> some View {
+        ColorPicker(title, selection: Binding(
+            get: { PaletteCode.color(PaletteCode.colors(of: palette)[keyPath: key]) },
+            set: { var c = PaletteCode.colors(of: palette); c[keyPath: key] = PaletteCode.rgb($0); palette = PaletteCode.encode(c) }),
+                    supportsOpacity: false)
+    }
+
+    private func swatch(_ p: AvatarPalette?, selected: Bool, label: String? = nil, symbol: String? = nil,
+                        action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                ZStack {
+                    if let p {
+                        Circle().fill(LinearGradient(colors: p.head, startPoint: .top, endPoint: .bottom))
+                        Circle().fill(p.eye).frame(width: 7, height: 7).offset(y: -2).shadow(color: p.eye, radius: 3)
+                    } else {
+                        Circle().fill(AngularGradient(colors: Theme.glow, center: .center))
+                    }
+                    if let symbol, p == nil || label == "Custom" {
+                        Image(systemName: symbol).font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                            .padding(3).background(Circle().fill(.black.opacity(0.55))).offset(x: 11, y: 11)
+                    }
+                }
+                .frame(width: 32, height: 32)
+                .overlay(Circle().strokeBorder(selected ? Color.white : Color.white.opacity(0.15), lineWidth: selected ? 2 : 1).padding(-3))
+                .scaleEffect(selected ? 1.08 : 1)
+                Text(label ?? p?.name ?? "").font(.system(size: 10)).foregroundStyle(selected ? .primary : Theme.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(.spring(duration: 0.25, bounce: 0.4), value: selected)
+        .help(label ?? p?.name ?? "")
+    }
 }
 
 /// Maps live agent state to a mood. Transient moods (happy/sad) hold briefly

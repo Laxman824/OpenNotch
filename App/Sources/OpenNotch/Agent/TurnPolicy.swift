@@ -32,7 +32,7 @@ enum TurnPolicy {
     static let parallelSafe: Set<String> = [
         "read_file", "list_directory", "search_text", "find_files", "fetch_url", "web_search",
         "system_info", "calendar_events", "reminders_list", "weather", "contacts_find",
-        "list_scheduled", "recall", "search_chats",
+        "list_scheduled", "recall", "search_chats", "spotlight_search", "shortcuts_list",
     ]
 
     /// Indices of `calls` to run together up front: the leading run of parallel-safe
@@ -53,7 +53,8 @@ enum TurnPolicy {
 
     /// Tools whose results are text written by someone else (web pages, email, notes, MCP servers).
     static func isExternal(_ tool: String) -> Bool {
-        ["fetch_url", "web_search", "mail_recent", "mail_read", "notes_search", "notes_read", "active_tab"].contains(tool)
+        ["fetch_url", "web_search", "mail_recent", "mail_read", "notes_search", "notes_read", "active_tab",
+         "screen_text", "shortcuts_run"].contains(tool)
             || tool.hasPrefix("mcp__")
     }
 
@@ -83,6 +84,9 @@ enum TurnPolicy {
             return "run_command:" + program
         case "mail_send":
             return nil                      // every email is approved on its own
+        case "shortcuts_run":               // one shortcut at a time, never all of them
+            guard let n = (args["name"] as? String)?.trimmingCharacters(in: .whitespaces), !n.isEmpty else { return nil }
+            return "shortcut:" + n.lowercased()
         case "write_file", "edit_file":
             guard let p = args["path"] as? String, !p.isEmpty else { return nil }
             let dir = (PathPolicy.resolve(p) as NSString).deletingLastPathComponent
@@ -108,6 +112,7 @@ enum TurnPolicy {
     /// Button label for the allowance: "Allow git for this chat".
     static func allowLabel(_ key: String) -> String {
         if key.hasPrefix("run_command:") { return "Allow \(key.dropFirst(12)) in this chat" }
+        if key.hasPrefix("shortcut:") { return "Allow this shortcut for this chat" }
         if key.hasPrefix("files:") {
             return "Allow edits in \((String(key.dropFirst(6)) as NSString).lastPathComponent)/ for this chat"
         }

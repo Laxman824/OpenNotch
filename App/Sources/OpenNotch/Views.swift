@@ -1091,13 +1091,16 @@ struct Transcript: View {
     // height (streaming text, the working row) can loop in layout forever and hang
     // the app. Long chats render only their tail.
     @State private var shown = 150
+    /// Keeps the empty state a moment after the first message so Puff can hand off (spring out).
+    @State private var handoff = false
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    if backend.items.isEmpty {
-                        EmptyState(backend: backend, run: run)
+                    if backend.items.isEmpty || handoff {
+                        EmptyState(backend: backend, run: run, leaving: handoff)
+                            .transition(.opacity)
                     }
                     if backend.items.count > shown {
                         Button("Show earlier messages") { shown += 150 }
@@ -1123,6 +1126,13 @@ struct Transcript: View {
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: backend.items.isEmpty) { was, now in
+                guard was, !now, (backend.items.first?.kind == .user) else { return }
+                handoff = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) {
+                    withAnimation(.easeOut(duration: 0.2)) { handoff = false }
+                }
+            }
         }
     }
 }
@@ -1249,11 +1259,15 @@ struct EmptyState: View {
     @EnvironmentObject var hub: Hub
     @AppStorage("assistantName") private var assistantName = "Ledge"
     let run: (QuickAction) -> Void
+    /// The first message is on its way: Puff leaves, the rest fades.
+    var leaving = false
+    // Only Puff animates here; the text, button and grid are simply there.
+    private var shown: Bool { !leaving }
 
     var body: some View {
         VStack(spacing: 16) {
-            ForYouSection(engine: hub.proactive)
-            HeroAvatar(proactive: hub.proactive, backend: backend)
+            ForYouSection(engine: hub.proactive).opacity(leaving ? 0 : 1)
+            HeroAvatar(proactive: hub.proactive, backend: backend, leaving: leaving)
             VStack(spacing: 4) {
                 Text("Hi, I'm \(assistantName). What can I do for you?")
                     .font(.system(size: 17, weight: .semibold, design: .rounded))
@@ -1261,6 +1275,7 @@ struct EmptyState: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.tertiary)
             }
+            .opacity(leaving ? 0 : 1)
             Button { handsFree.start() } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "waveform").font(.system(size: 13, weight: .bold))
@@ -1275,6 +1290,7 @@ struct EmptyState: View {
                 .shadow(color: Theme.glow[1].opacity(0.45), radius: 12, y: 3)
             }
             .buttonStyle(HoverLift())
+            .opacity(shown ? 1 : 0)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8),
                                 GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(quickActions) { a in
@@ -1295,10 +1311,12 @@ struct EmptyState: View {
                         .contentShape(RoundedRectangle(cornerRadius: 12))
                     }
                     .buttonStyle(HoverLift())
+                    .opacity(shown ? 1 : 0)
                 }
             }
         }
         .frame(maxWidth: .infinity)
+        .animation(.easeOut(duration: 0.22), value: leaving)
     }
 }
 
@@ -1620,13 +1638,17 @@ struct HandsFreeSwitch: View {
 struct HeroAvatar: View {
     @ObservedObject var proactive: ProactiveEngine
     @ObservedObject var backend: Backend
+    var leaving = false
+    var onImpact: (() -> Void)? = nil
+    var onStand: (() -> Void)? = nil
     @Environment(\.notchContentVisible) private var visible
     @AppStorage("character.style") private var style = "puff"
     var body: some View {
         if style == "puff" {
-            // Puff drops in with a mini superhero landing and settles here.
-            HeroStage(visible: visible)
-                .frame(width: 320, height: proactive.proposals.isEmpty ? 118 : 96)
+            // Puff drops in (a different hero entrance each time — Entrances.swift) and settles here.
+            HeroStage(visible: visible, size: 74, leaving: leaving, onImpact: onImpact, onStand: onStand)
+                .frame(maxWidth: .infinity)
+                .frame(height: proactive.proposals.isEmpty ? 132 : 100)
                 .padding(.top, 2)
         } else {
             AssistantFace(size: proactive.proposals.isEmpty ? 86 : 60, backend: backend)

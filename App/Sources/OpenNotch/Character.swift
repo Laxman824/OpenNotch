@@ -166,6 +166,8 @@ struct PuffCanvas: View {
     var limbs: PuffLimbs? = nil
     /// Force eyes shut/open (pre-rendered perch frames); nil = blink on its own clock.
     var blink: Bool? = nil
+    /// Body shape, accessory and finish (PuffLook.swift); the default is the original Puff.
+    var outfit: PuffLook = .current
 
     private static let ink = Color(red: 0.10, green: 0.07, blue: 0.16)
     private static let blush = Color(red: 1.0, green: 0.45, blue: 0.62)
@@ -181,10 +183,12 @@ struct PuffCanvas: View {
             // ── Body geometry: jelly squash, breathing, hop, sway ──
             let breathe = CGFloat(sin(t * (mood == .sleeping ? 1.0 : 1.9))) * (mood == .sleeping ? 0.03 : 0.018)
             let sq = CGFloat(phys.squash) + breathe
-            let w = s * 0.80 * (1 + sq * 0.85)
-            let h = s * (tiny ? 0.74 : 0.68) * (1 - sq)
+            let shapeK = outfit.shape.scale
+            let w = s * 0.80 * (1 + sq * 0.85) * shapeK.w
+            let h = s * (tiny ? 0.74 : 0.68) * (1 - sq) * shapeK.h
             let ground = sz.height / 2 + s * (tiny ? 0.37 : 0.40)
             let lift = CGFloat(phys.hop) * s * 0.55 + (happy && phys.hop == 0 ? CGFloat(abs(sin(t * 7))) * s * 0.03 : 0)
+                + (outfit.shape == .ghost ? s * (0.035 + 0.02 * CGFloat(sin(t * 2))) : 0)      // a ghost floats
             let body = CGRect(x: sz.width / 2 - w / 2, y: ground - h - lift, width: w, height: h)
 
             var g = ctx
@@ -194,7 +198,9 @@ struct PuffCanvas: View {
 
             let top = palette.head.first ?? .purple
             let bottom = palette.head.last ?? .pink
-            let bodyPath = RoundedRectangle(cornerRadius: min(w, h) * 0.47, style: .continuous).path(in: body)
+            let bodyPath = PuffDraw.bodyPath(outfit.shape, in: body, t: t)
+            let (fillTop, fillBottom) = PuffDraw.bodyColors(outfit.shape, top: top, bottom: bottom)
+            let jelly = outfit.finish == .jelly
 
             // Soft halo (gradient, not blur).
             if !tiny {
@@ -206,8 +212,8 @@ struct PuffCanvas: View {
             }
 
             // ── Sprout (sways with the body, perks up when listening, glows when busy) ──
-            if !tiny {
-                let base = CGPoint(x: body.midX, y: body.minY + h * 0.04)
+            if !tiny && outfit.accessory == .sprout {
+                let base = PuffDraw.crown(outfit.shape, in: body)
                 let angle = phys.sway * 1.8 + sin(t * 1.6) * 0.10 + (mood == .listening ? -0.15 : 0)
                     + (mood == .working ? sin(t * 9) * 0.25 : 0)
                 let len = s * 0.15
@@ -215,15 +221,16 @@ struct PuffCanvas: View {
                 var stem = Path()
                 stem.move(to: base)
                 stem.addQuadCurve(to: tip, control: CGPoint(x: base.x, y: base.y - len * 0.6))
-                g.stroke(stem, with: .color(Color(red: 0.36, green: 0.82, blue: 0.52)),
-                         style: StrokeStyle(lineWidth: max(1.2, s * 0.035), lineCap: .round))
+                g.stroke(stem, with: .linearGradient(Gradient(colors: [Color(red: 0.5, green: 0.92, blue: 0.6), Color(red: 0.22, green: 0.65, blue: 0.42)]),
+                                                     startPoint: tip, endPoint: base),
+                         style: StrokeStyle(lineWidth: max(1.2, s * 0.038), lineCap: .round))
                 let busy = mood == .thinking || mood == .working || mood == .talking
                 let leafGlow = busy ? 0.6 + 0.4 * sin(t * 5) : 0.0
                 for side in [-1.0, 1.0] {
                     var leaf = g
                     leaf.translateBy(x: tip.x, y: tip.y)
                     leaf.rotate(by: .radians(angle + side * 0.9))
-                    let lw = s * 0.12, lh = s * 0.065
+                    let lw = s * 0.14, lh = s * 0.075
                     let rect = CGRect(x: side > 0 ? 0 : -lw, y: -lh / 2, width: lw, height: lh)
                     leaf.fill(Ellipse().path(in: rect), with: .linearGradient(
                         Gradient(colors: [Color(red: 0.55, green: 0.95, blue: 0.62), Color(red: 0.25, green: 0.72, blue: 0.48)]),
@@ -232,14 +239,34 @@ struct PuffCanvas: View {
                         leaf.fill(Ellipse().path(in: rect.insetBy(dx: -lw * 0.2, dy: -lh * 0.4)),
                                   with: .color(palette.eye.opacity(0.25 * leafGlow)))
                     }
+                    if detailed {
+                        // A midrib and a soft highlight on each leaf.
+                        var vein = Path()
+                        vein.move(to: CGPoint(x: side > 0 ? lw * 0.08 : -lw * 0.08, y: 0))
+                        vein.addLine(to: CGPoint(x: side > 0 ? lw * 0.85 : -lw * 0.85, y: 0))
+                        leaf.stroke(vein, with: .color(.white.opacity(0.45)), style: StrokeStyle(lineWidth: max(0.5, s * 0.006), lineCap: .round))
+                        leaf.fill(Ellipse().path(in: CGRect(x: side > 0 ? lw * 0.2 : -lw * 0.55, y: -lh * 0.4, width: lw * 0.35, height: lh * 0.3)),
+                                  with: .color(.white.opacity(0.35)))
+                    }
+                }
+                if detailed {
+                    // A dewdrop on the tip that catches the light.
+                    let dr = s * 0.018
+                    let dc = CGPoint(x: tip.x + CGFloat(cos(angle + 0.9)) * s * 0.09, y: tip.y + CGFloat(sin(angle + 0.9)) * s * 0.03 - dr)
+                    g.fill(Circle().path(in: CGRect(x: dc.x - dr, y: dc.y - dr, width: dr * 2, height: dr * 2)),
+                           with: .radialGradient(Gradient(colors: [.white.opacity(0.95), palette.eye.opacity(0.5), .white.opacity(0.2)]),
+                                                 center: CGPoint(x: dc.x - dr * 0.3, y: dc.y - dr * 0.3), startRadius: 0, endRadius: dr * 1.3))
                 }
             }
+
+            // ── Ears, tails, spikes, tufts — behind everything ──
+            if !tiny { PuffDraw.behind(outfit.shape, g, body: body, top: top, bottom: bottom, t: t, s: s) }
 
             // ── Limbs, behind the body ──
             if let limbs {
                 let edge = Color.black.opacity(0.16)
                 // Feet: soft shaded pads under the body; lifted ones rise and tip.
-                for (side, lift) in [(-1.0, limbs.footL), (1.0, limbs.footR)] {
+                for (side, lift) in [(-1.0, limbs.footL), (1.0, limbs.footR)] where !outfit.shape.hidesFeet {
                     let fw = w * 0.27, fh = h * 0.21
                     let fx = body.midX + CGFloat(side) * w * 0.2 - fw / 2
                     let fy = body.maxY - fh * 0.55 - CGFloat(lift) * s * 0.09
@@ -256,7 +283,7 @@ struct PuffCanvas: View {
                 // Arms: stubby jelly arms growing out of the body (same colour as the body
                 // where they join), with round mitten hands.
                 let shoulder = top.mix(bottom, 0.62)
-                for (side, angle) in [(-1.0, limbs.armL), (1.0, limbs.armR)] {
+                for (side, angle) in [(-1.0, limbs.armL), (1.0, limbs.armR)] where !outfit.shape.hidesArms {
                     let len = s * 0.2, thick = s * 0.12
                     var a = g
                     a.translateBy(x: body.midX + CGFloat(side) * w * 0.37, y: body.minY + h * 0.55)
@@ -274,14 +301,17 @@ struct PuffCanvas: View {
             }
 
             // ── Body: glossy jelly ──
-            g.fill(bodyPath, with: .linearGradient(Gradient(colors: [top, bottom]),
+            g.fill(bodyPath, with: .linearGradient(Gradient(colors: [fillTop, fillBottom]),
                                                    startPoint: CGPoint(x: body.midX, y: body.minY),
                                                    endPoint: CGPoint(x: body.midX, y: body.maxY)))
             // underside shade + top sheen
             g.fill(bodyPath, with: .radialGradient(Gradient(colors: [.clear, Color.black.opacity(0.18)]),
                                                    center: CGPoint(x: body.midX, y: body.minY + h * 0.35),
                                                    startRadius: w * 0.25, endRadius: w * 0.75))
-            if detailed {
+            if detailed && !jelly {
+                PuffDraw.plush(g, body: bodyPath, rect: body, top: top, bottom: bottom, s: s)
+            }
+            if detailed && jelly {
                 // Jelly: light glowing through the bottom, a soft core, and a rim light on top.
                 g.fill(Ellipse().path(in: CGRect(x: body.minX + w * 0.18, y: body.maxY - h * 0.34, width: w * 0.64, height: h * 0.3)),
                        with: .radialGradient(Gradient(colors: [bottom.mix(.white, 0.45).opacity(0.55), bottom.opacity(0)]),
@@ -295,8 +325,8 @@ struct PuffCanvas: View {
                          lineWidth: max(1, s * 0.018))
             }
             let sheen = CGRect(x: body.minX + w * 0.16, y: body.minY + h * 0.08, width: w * 0.34, height: h * 0.2)
-            g.fill(Ellipse().path(in: sheen), with: .color(.white.opacity(0.32)))
-            if !tiny {
+            g.fill(Ellipse().path(in: sheen), with: .color(.white.opacity(jelly ? 0.32 : 0.08)))
+            if !tiny && jelly {
                 g.fill(Circle().path(in: CGRect(x: body.maxX - w * 0.24, y: body.minY + h * 0.16, width: w * 0.06, height: w * 0.06)),
                        with: .color(.white.opacity(0.45)))
             }
@@ -306,8 +336,8 @@ struct PuffCanvas: View {
             if mood == .thinking { look = CGPoint(x: sin(t * 1.3) * 0.7, y: -0.75) }
             if mood == .working { look = CGPoint(x: sin(t * 2.6) * 0.55, y: 0.35) }
             if mood == .sleeping { look = .zero }
-            let eyeY = body.midY - h * 0.02 + CGFloat(look.y) * h * 0.08
-            let spread = w * 0.2
+            let eyeY = body.midY - h * 0.02 + CGFloat(look.y) * h * 0.08 + h * outfit.shape.faceDrop
+            let spread = w * 0.2 * outfit.shape.faceSpread
             let boost = CGFloat(phys.eyeBoost) * (expr == .surprised ? 1.25 : 1)
             let ew = w * (tiny ? 0.2 : 0.18) * boost, eh = w * (tiny ? 0.24 : 0.23) * boost
             let lw = max(1.2, s * 0.045)
@@ -315,6 +345,10 @@ struct PuffCanvas: View {
             // Blink every ~3.8 s (sometimes double). Deterministic in t.
             let period = 3.8, cycle = floor(t / period), phase = t - cycle * period
             let blinking = blink ?? (phase > period - 0.12 || (Int(cycle) % 4 == 1 && phase > period - 0.38 && phase < period - 0.27))
+            let faceGeo = PuffDraw.Face(eyeY: eyeY, spread: spread, ew: ew, eh: eh, mouthY: eyeY + eh * 0.82, lookX: CGFloat(look.x))
+            if !tiny {
+                PuffDraw.markings(outfit.shape, g, body: body, face: faceGeo, top: top, bottom: bottom, eye: palette.eye, t: t, s: s)
+            }
 
             for side in [-1.0, 1.0] {
                 let sideF = CGFloat(side)
@@ -456,6 +490,15 @@ struct PuffCanvas: View {
                 p.move(to: CGPoint(x: body.midX - mw * 0.55, y: my))
                 p.addQuadCurve(to: CGPoint(x: body.midX + mw * 0.55, y: my), control: CGPoint(x: body.midX, y: my + eh * 0.32))
                 g.stroke(p, with: .color(Self.ink), style: StrokeStyle(lineWidth: lw * 0.8, lineCap: .round))
+            }
+
+            if !tiny { PuffDraw.faceExtras(outfit.shape, g, body: body, face: faceGeo, mood: mood, t: t, s: s) }
+
+            // ── Accessory (in front, moves with the body) ──
+            if s >= 18 && outfit.accessory != .none && outfit.accessory != .sprout {
+                PuffDraw.accessory(outfit.accessory, g, look: outfit, body: body,
+                                   face: .init(eyeY: eyeY, spread: spread, ew: ew, eh: eh, mouthY: my, lookX: CGFloat(look.x)),
+                                   palette: palette, t: t, s: s, mood: mood)
             }
 
             // Anger mark

@@ -12,7 +12,11 @@ enum ToolRouter {
         "recall", "search_chats",
     ]
 
-    struct Group { let name: String; let pattern: String; let tools: [String] }
+    struct Group {
+        let name: String; let pattern: String; let tools: [String]
+        /// A connector set to `"routing": "always"`.
+        var always = false
+    }
 
     static let groups: [Group] = [
         Group(name: "files", pattern: #"\b(edit|write|create|change|fix|rename|refactor|update|append|grep|bug|search (the|my) (code|files?)|in the file|save (it|to)|attached files)\b"#,
@@ -33,20 +37,31 @@ enum ToolRouter {
               tools: ["schedule_task", "list_scheduled", "cancel_scheduled"]),
         Group(name: "music", pattern: #"\b(play|pause|song|music|spotify|track|volume|album|artist)\b"#, tools: ["media_control"]),
         Group(name: "awake", pattern: #"\b(awake|sleep|caffeinate|don'?t let (it|the mac) sleep)\b"#, tools: ["keep_awake"]),
+        Group(name: "shortcuts", pattern: #"\b(shortcuts?|automations?|routine|do not disturb|focus mode|turn (on|off)|home ?kit|lights?|scene|send (a )?(message|text|imessage)|text (him|her|them|my))\b"#,
+              tools: ["shortcuts_list", "shortcuts_run"]),
+        Group(name: "screen", pattern: #"\b((this|that) (email|message|mail|doc|document|window|page|text|article|code|error|chat|thread|screen|pdf|slide|sheet|post|tweet|issue|pr)|on (my|the) screen|what (am i|i'?m) (looking at|reading|seeing)|(summari[sz]e|explain|translate|reply to|answer|proofread|fix) (this|that|it)|in front of me)\b"#,
+              tools: ["screen_text"]),
+        Group(name: "routines", pattern: #"\b(routines?|every ?time i say|whenever i say|when i say|save (this|that|it) as|(make|turn) (it|this|that)? ?(into )?(a |me a )?shortcut|create (a )?shortcut|add (it |this |that )?to (apple )?shortcuts|siri)\b"#,
+              tools: ["routine_save", "routine_list", "routine_run", "routine_delete", "routine_export_shortcut"]),
+        Group(name: "find", pattern: #"\b(find|where('?s| is| did i)|locate|look for|search (my|for|the)|the (pdf|doc|docx|document|file|deck|spreadsheet|presentation|photo|screenshot|invoice|receipt|contract)|sent me|i (saved|downloaded))\b"#,
+              tools: ["spotlight_search"]),
     ]
 
-    /// Picks the tools for this request. `extra` = groups asked for via more_tools.
-    static func select(_ all: [AgentTool], conversation: [ChatMessage], extra: Set<String> = []) -> [AgentTool] {
+    /// Picks the tools for this request. `extra` = groups asked for via more_tools; `connectors` = one
+    /// group per MCP server (MCPManager.groups) — connector tools are routed like everything else.
+    static func select(_ all: [AgentTool], conversation: [ChatMessage], extra: Set<String> = [],
+                       connectors: [Group] = []) -> [AgentTool] {
         if UserDefaults.standard.bool(forKey: "agent.allTools") { return all }
         let users = conversation.filter { $0.role == .user && $0.toolCallId == nil }.suffix(2)
         let text = users.map { routingText($0.text) }.joined(separator: "\n").lowercased()
         var names = core
-        for g in groups where extra.contains(g.name) || text.range(of: g.pattern, options: .regularExpression) != nil {
+        for g in groups + connectors
+        where g.always || extra.contains(g.name) || text.range(of: g.pattern, options: .regularExpression) != nil {
             names.formUnion(g.tools)
         }
         // Tools the model already used in this chat stay available (follow-ups like "now reply to it").
         for m in conversation.suffix(40) { for c in m.toolCalls ?? [] { names.insert(c.name) } }
-        return all.filter { names.contains($0.name) || $0.name.hasPrefix("mcp__") }
+        return all.filter { names.contains($0.name) }
     }
 
     /// What a message is about: what was typed, plus the start of what the app attached
@@ -60,18 +75,24 @@ enum ToolRouter {
         return typed + "\n" + String(ctx.prefix(1500))
     }
 
-    static var moreTools: AgentTool {
-        AgentTool(
+    static var moreTools: AgentTool { moreTools(connectors: []) }
+
+    /// Lists the built-in groups and every connector (by name and tool count — their tools are many).
+    static func moreTools(connectors: [Group]) -> AgentTool {
+        let all = groups + connectors
+        let connectorText = connectors.isEmpty ? "" : ". Connected services (each adds its own tools): "
+            + connectors.map { "\($0.name) (\($0.tools.count) tools)" }.joined(separator: "; ")
+        return AgentTool(
             name: "more_tools",
             description: "Load more tools when you need one you don't have. Groups and the tools they add: "
                 + groups.map { "\($0.name) (\($0.tools.joined(separator: ", ")))" }.joined(separator: "; ")
-                + ". Ask for every group you'll need in one call.",
+                + connectorText + ". Ask for every group you'll need in one call.",
             schema: #"{"type":"object","properties":{"groups":{"type":"array","items":{"type":"string"}}},"required":["groups"]}"#,
             risk: .read, verb: "Loading tools", detail: { a in (a.dict["groups"] as? [String] ?? []).joined(separator: ", ") },
             preview: { _ in "" },
             run: { a in
-                let want = (a.dict["groups"] as? [String] ?? []).filter { g in groups.contains { $0.name == g } }
-                return want.isEmpty ? .fail("Unknown group. Choose from: " + groups.map(\.name).joined(separator: ", "))
+                let want = (a.dict["groups"] as? [String] ?? []).filter { g in all.contains { $0.name == g } }
+                return want.isEmpty ? .fail("Unknown group. Choose from: " + all.map(\.name).joined(separator: ", "))
                     : ToolOutcome(ok: true, text: "Loaded: \(want.joined(separator: ", ")). They're available from your next step.")
             })
     }

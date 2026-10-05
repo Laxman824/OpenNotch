@@ -422,13 +422,10 @@ private struct GeneralPane: View {
             PrefToggle("Peek out of the notch", Prefs.characterPeek, sub: "Now and then \(Prefs.name) pops out to say hi while you work")
             PrefToggle("\(Prefs.name) sits beside the notch", Prefs.characterPerch,
                        sub: "Sits next to the closed notch with arms and feet — waves, stretches, dances to music, naps")
-            HStack {
-                Text("Notch face colours").font(.system(size: 12.5, weight: .medium))
-                Spacer()
-                Picker("", selection: $palette) {
-                    ForEach(AvatarPalette.all) { Text($0.name).tag($0.id) }
-                }
-                .labelsHidden().frame(width: 180)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("\(Prefs.name)'s look").font(.system(size: 12.5, weight: .medium))
+                PuffLookPicker()
+                PuffColorPicker()
             }
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
@@ -761,45 +758,224 @@ final class AIModel: ObservableObject {
     private func apply() { (NSApp.delegate as? AppDelegate)?.backend.reloadAI() }
 }
 
-/// Settings › AI › Web search: DuckDuckGo by default, or an API with a key.
+/// Settings › AI › Web search: Parallel by default (free, no key), DuckDuckGo, or an API with a key.
 private struct SearchSection: View {
-    @State private var engine = SearchEngine.active
+    @State private var choice = SearchEngine.choice
     @State private var keyText = ""
-    @State private var saved = SearchEngine.allCases.filter { $0.key != nil }
+    @State private var saved = Self.savedAccounts()
+
+    private var engine: SearchEngine? { SearchEngine(rawValue: choice) }
+    private var account: String? { choice == "parallel" ? ParallelSearch.account : engine?.account }
 
     var body: some View {
         Section(title: "Web search") {
             HStack {
-                Picker("", selection: Binding(get: { engine?.rawValue ?? "ddg" },
-                                              set: { engine = SearchEngine(rawValue: $0); SearchEngine.active = engine; keyText = "" })) {
+                Picker("", selection: Binding(get: { choice },
+                                              set: { choice = $0; SearchEngine.choice = $0; keyText = "" })) {
+                    Text("Parallel (free, no key)").tag("parallel")
                     Text("DuckDuckGo (no key)").tag("ddg")
                     ForEach(SearchEngine.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 .labelsHidden().frame(width: 190)
-                if let e = engine {
-                    SecureField(saved.contains(e) ? "Saved — paste to replace" : "\(e.label) API key", text: $keyText)
+                if let account {
+                    let has = saved.contains(account)
+                    SecureField(has ? "Saved — paste to replace" : choice == "parallel" ? "API key (optional)" : "\(engine?.label ?? "") API key",
+                                text: $keyText)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit(save)
                     Button("Save", action: save).disabled(keyText.isEmpty)
                 }
             }
             HStack(spacing: 4) {
-                if let e = engine {
-                    Text(saved.contains(e) ? "Using \(e.label); falls back to DuckDuckGo if it fails." : "Add a key to use \(e.label).")
+                if choice == "parallel" {
+                    Text("Only the search goes to Parallel — never your chats. A key raises the limits.")
+                    Link("Privacy ↗", destination: ParallelSearch.privacy)
+                    Link("Get a key ↗", destination: ParallelSearch.keyPage)
+                } else if let e = engine {
+                    Text(saved.contains(e.account) ? "Using \(e.label); falls back to Parallel, then DuckDuckGo." : "Add a key to use \(e.label).")
                     if let url = e.keyPage { Link("Get a key ↗", destination: url) }
                 } else {
-                    Text("Free and keyless, but it can rate-limit. A Brave or Tavily key gives steadier results.")
+                    Text("Free and keyless, but it can rate-limit and its results are thinner.")
                 }
             }
             .font(.system(size: 11)).foregroundStyle(Theme.secondary)
         }
     }
 
+    private static func savedAccounts() -> Set<String> {
+        Set((SearchEngine.allCases.map(\.account) + [ParallelSearch.account]).filter { Keychain.get($0).map { !$0.isEmpty } ?? false })
+    }
+
     private func save() {
-        guard let e = engine, !keyText.isEmpty else { return }
-        Keychain.set(keyText.trimmingCharacters(in: .whitespacesAndNewlines), for: e.account)
+        guard let account, !keyText.isEmpty else { return }
+        Keychain.set(keyText.trimmingCharacters(in: .whitespacesAndNewlines), for: account)
         keyText = ""
-        saved = SearchEngine.allCases.filter { $0.key != nil }
+        saved = Self.savedAccounts()
+    }
+}
+
+/// Settings › AI › Routines: saved jobs you start by saying their name — run, add to Apple Shortcuts, delete.
+private struct RoutinesSection: View {
+    @State private var items = RoutineStore.shared.all()
+    @State private var message: String?
+    @State private var confirmDelete: String?
+
+    var body: some View {
+        Section(title: "Routines") {
+            if items.isEmpty {
+                Text("Tell \(Prefs.name) something like “every time I say start work, open Linear and Slack, turn on Focus and brief me "
+                     + "on my day”. Then just say “start work”.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+            }
+            ForEach(items) { r in
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(r.name).font(.system(size: 12.5, weight: .semibold))
+                        Text(r.steps).font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(2)
+                    }
+                    Spacer()
+                    Button("Run") { runNow(r) }
+                    Button { Task { @MainActor in
+                        let out = await ShortcutExport.export(r)
+                        message = out.text
+                    } } label: { Label("Add to Shortcuts", systemImage: "square.2.layers.3d") }
+                    Button(confirmDelete == r.id ? "Delete?" : "Delete") {
+                        if confirmDelete == r.id {
+                            RoutineStore.shared.delete(r.id); confirmDelete = nil; items = RoutineStore.shared.all()
+                        } else { confirmDelete = r.id }
+                    }
+                    .foregroundStyle(confirmDelete == r.id ? Color.red : Theme.secondary)
+                }
+                .controlSize(.small)
+            }
+            if let message { Text(message).font(.system(size: 11)).foregroundStyle(Theme.secondary) }
+        }
+        .onAppear { items = RoutineStore.shared.all() }
+    }
+
+    private func runNow(_ r: Routine) {
+        guard let app = NSApp.delegate as? AppDelegate else { return }
+        app.runRoutine(r)
+    }
+}
+
+/// Settings › AI › Connectors: one-click services (browser sign-in), any server by URL, and mcp.json.
+private struct ConnectorsSection: View {
+    @ObservedObject private var mcp = MCPManager.shared
+    @State private var busy: String?
+    @State private var message: String?
+    @State private var failed = false
+    @State private var urlText = ""
+
+    private var states: [String: String] { Dictionary(mcp.status.map { ($0.name, $0.state) }, uniquingKeysWith: { a, _ in a }) }
+
+    var body: some View {
+        Section(title: "Connectors") {
+            Text("Connect a service and \(Prefs.name) can use it. You sign in on the service's own page in your browser — "
+                 + "OpenNotch never sees your password, and its tools still ask before acting.")
+                .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 168), spacing: 8)], spacing: 8) {
+                ForEach(ConnectorCatalog.all) { c in tile(c) }
+            }
+            ForEach(mcp.status.filter { s in !ConnectorCatalog.all.contains { $0.id == s.name } }, id: \.name) { s in
+                HStack {
+                    Text(s.name).font(.system(size: 12.5, weight: .semibold))
+                    Spacer()
+                    Text(s.state).font(.system(size: 11)).foregroundStyle(s.state.hasPrefix("failed") ? Color.orange : Theme.secondary)
+                    if mcp.signInNeeded.contains(s.name) { Button("Sign in") { run(s.name) { try await mcp.signInAgain(s.name) } } }
+                    if s.state != "disabled" {
+                        Button("Remove") { run(s.name) { try await mcp.disconnect(s.name) } }.help("Remove from mcp.json and forget its sign-in")
+                    }
+                }
+                .controlSize(.small)
+            }
+            HStack {
+                TextField("Add by URL — https://…/mcp", text: $urlText)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addURL)
+                Button("Add", action: addURL).disabled(urlText.trimmingCharacters(in: .whitespaces).isEmpty || busy != nil)
+            }
+            if let message {
+                Text(message).font(.system(size: 11)).foregroundStyle(failed ? Color.orange : Theme.secondary)
+            }
+            HStack {
+                Button("Edit mcp.json") {
+                    MCPManager.ensureConfigFile()
+                    NSWorkspace.shared.open(URL(fileURLWithPath: MCPManager.configPath))
+                }
+                Button("Reload") { Task { await MCPManager.shared.reload() } }
+                Spacer()
+                Text("Local programs and keys go in mcp.json.").font(.system(size: 10.5)).foregroundStyle(Theme.tertiary)
+            }
+            .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder private func tile(_ c: ConnectorInfo) -> some View {
+        let state = states[c.id]
+        let connected = state != nil && !mcp.signInNeeded.contains(c.id) && !(state ?? "").hasPrefix("failed") && state != "disabled"
+        HStack(spacing: 8) {
+            ConnectorLogo.Tile(id: c.id, name: c.name, fallback: c.color, size: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(c.name).font(.system(size: 12, weight: .semibold))
+                Text(connected ? (state ?? "") : c.blurb).font(.system(size: 10)).foregroundStyle(Theme.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 4)
+            if busy == c.id {
+                ProgressView().controlSize(.small)
+            } else if connected {
+                Menu {
+                    Button("Disconnect") { run(c.id) { try await mcp.disconnect(c.id) } }
+                } label: { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                .menuStyle(.borderlessButton).fixedSize().help("Connected")
+            } else if state != nil {
+                Button(mcp.signInNeeded.contains(c.id) ? "Sign in" : "Retry") {
+                    run(c.id) { try await mcp.connect(name: c.id, url: URL(string: c.url)!, keywords: c.keywords) }
+                }
+                .controlSize(.small)
+            } else {
+                Button("Connect") {
+                    run(c.id) { try await mcp.connect(name: c.id, url: URL(string: c.url)!, keywords: c.keywords) }
+                }
+                .controlSize(.small).disabled(busy != nil)
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.primary.opacity(0.05)))
+        .help(c.blurb)
+    }
+
+    private func addURL() {
+        let raw = urlText.trimmingCharacters(in: .whitespaces)
+        guard let url = URL(string: raw), MCPEndpoint.allowed(url) else {
+            failed = true
+            message = "Use the server's https address (plain http only works for a server on this Mac)."
+            return
+        }
+        let name = ConnectorCatalog.serverName(for: url, existing: MCPManager.serverNames)
+        run(name) {
+            try await mcp.connect(name: name, url: url)
+            urlText = ""
+        }
+    }
+
+    /// Runs one connector action; the browser may open for a sign-in.
+    private func run(_ id: String, _ action: @escaping @MainActor () async throws -> Void) {
+        busy = id
+        failed = false
+        message = "Working on \(id)… if your browser opens, sign in there and click Allow."
+        Task { @MainActor in
+            do {
+                try await action()
+                let st = MCPManager.shared.status.first { $0.name == id }?.state
+                failed = st?.hasPrefix("failed") ?? false
+                message = st.map { "\(id): \($0)" } ?? "\(id) removed."
+            } catch {
+                failed = true
+                message = "\(id): \(error.localizedDescription)"
+            }
+            busy = nil
+        }
     }
 }
 
@@ -920,27 +1096,8 @@ private struct AIPane: View {
         SearchSection()
         MemorySection()
 
-        Section(title: "Connectors (MCP)") {
-            if mcp.status.isEmpty {
-                Text("Add tools like GitHub, Gmail or a browser by listing MCP servers in mcp.json.")
-                    .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
-            }
-            ForEach(mcp.status, id: \.name) { s in
-                HStack {
-                    Text(s.name).font(.system(size: 12.5, weight: .semibold))
-                    Spacer()
-                    Text(s.state).font(.system(size: 11)).foregroundStyle(s.state.hasPrefix("failed") ? Color.orange : Theme.secondary)
-                }
-            }
-            HStack {
-                Button("Edit mcp.json") {
-                    MCPManager.ensureConfigFile()
-                    NSWorkspace.shared.open(URL(fileURLWithPath: MCPManager.configPath))
-                }
-                Button("Reload") { Task { await MCPManager.shared.reload() } }
-            }
-            .controlSize(.small)
-        }
+        RoutinesSection()
+        ConnectorsSection()
 
         Text("Chats are saved only on this Mac (~/Library/Application Support/OpenNotch/sessions). Nothing is sent anywhere except the AI you choose.")
             .font(.system(size: 11)).foregroundStyle(Theme.tertiary)
