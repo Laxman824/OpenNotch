@@ -6,7 +6,7 @@ import SwiftUI
 /// themselves** — the primary action runs only when you click it (the
 /// "propose, don't act" stance from plan_new_personal_agent.md).
 struct Proposal: Identifiable, Codable, Equatable {
-    enum Kind: String, Codable { case brief, meeting, inbox, memory, recap, week, notes }
+    enum Kind: String, Codable { case brief, meeting, inbox, memory, recap, week, notes, watch }
     var id: String                     // stable per source item → natural de-duplication
     var kind: Kind
     var title: String
@@ -27,6 +27,7 @@ struct Proposal: Identifiable, Codable, Equatable {
         case .recap: return "moon.stars.fill"
         case .week: return "chart.bar.fill"
         case .notes: return "waveform.badge.mic"
+        case .watch: return "eye.fill"
         }
     }
 }
@@ -301,6 +302,8 @@ final class ProactiveEngine: ObservableObject {
             }
         case .notes:
             if let text = p.body { backend?.showLocalExchange(user: "Notes from my call", reply: text) }
+        case .watch:
+            if let text = p.body { backend?.showLocalExchange(user: p.prompt ?? "Watcher", reply: text) }
         case .memory:
             for f in Self.facts(p) { MemoryStore.shared.remember(f.key, f.fact) }
             backend?.notice("Saved to memory — Settings › AI › Memory shows everything I remember.")
@@ -323,6 +326,23 @@ final class ProactiveEngine: ObservableObject {
     static func facts(_ p: Proposal) -> [(key: String, fact: String)] {
         guard let b = p.body, let arr = try? JSONSerialization.jsonObject(with: Data(b.utf8)) as? [[String: String]] else { return [] }
         return arr.compactMap { d in d["key"].flatMap { k in d["fact"].map { (k, $0) } } }
+    }
+
+    /// A watcher finished: met (with what it found), blocked or expired. Always drops down (it's what was asked for).
+    func proposeWatch(_ w: Watch, answer: String) {
+        let title: String
+        switch w.phase {
+        case .met: title = "It happened: \(w.until)"
+        case .blocked: title = "I can't keep watching \(w.what)"
+        default: title = "Stopped watching \(w.what)"
+        }
+        let body = answer.components(separatedBy: "\n").filter { !$0.uppercased().hasPrefix("STATUS:") }.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        lastPresented = .distantPast
+        add(Proposal(id: "watch:\(w.id):\(w.checks)", kind: .watch, title: String(title.prefix(90)), detail: w.note ?? "",
+                     actionLabel: "Show", prompt: "Watching: \(w.what)", url: nil,
+                     body: (w.note ?? "") + (body.isEmpty ? "" : "\n\n" + body),
+                     expires: Date().addingTimeInterval(7 * 24 * 3600)), present: true)
     }
 
     /// Call notes are ready (MeetingNotes).

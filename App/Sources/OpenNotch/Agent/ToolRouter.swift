@@ -9,7 +9,7 @@ enum ToolRouter {
     static let core: Set<String> = [
         "read_file", "list_directory", "find_files", "run_command", "fetch_url", "web_search", "open",
         "clipboard", "screenshot", "system_info", "remember", "forget", "todo_write", "notes", "timer", "more_tools",
-        "recall", "search_chats",
+        "recall", "search_chats", "ask_user", "run_script",
     ]
 
     struct Group {
@@ -43,6 +43,8 @@ enum ToolRouter {
               tools: ["screen_text"]),
         Group(name: "routines", pattern: #"\b(routines?|every ?time i say|whenever i say|when i say|save (this|that|it) as|(make|turn) (it|this|that)? ?(into )?(a |me a )?shortcut|create (a )?shortcut|add (it |this |that )?to (apple )?shortcuts|siri)\b"#,
               tools: ["routine_save", "routine_list", "routine_run", "routine_delete", "routine_export_shortcut"]),
+        Group(name: "watch", pattern: #"\b(watchers?|(stop|keep|what am i) watching|keep an eye|let me know (when|if|as soon as)|tell me (when|if|as soon as)|notify me|alert me|ping me (when|if)|monitor (it|this|that|the|for)|as soon as (it|they|she|he))\b"#,
+              tools: ["watch_start", "watch_list", "watch_stop"]),
         Group(name: "find", pattern: #"\b(find|where('?s| is| did i)|locate|look for|search (my|for|the)|the (pdf|doc|docx|document|file|deck|spreadsheet|presentation|photo|screenshot|invoice|receipt|contract)|sent me|i (saved|downloaded))\b"#,
               tools: ["spotlight_search"]),
     ]
@@ -52,16 +54,21 @@ enum ToolRouter {
     static func select(_ all: [AgentTool], conversation: [ChatMessage], extra: Set<String> = [],
                        connectors: [Group] = []) -> [AgentTool] {
         if UserDefaults.standard.bool(forKey: "agent.allTools") { return all }
-        let users = conversation.filter { $0.role == .user && $0.toolCallId == nil }.suffix(2)
-        let text = users.map { routingText($0.text) }.joined(separator: "\n").lowercased()
+        let matched = keywordGroups(conversation, connectors: connectors)
         var names = core
-        for g in groups + connectors
-        where g.always || extra.contains(g.name) || text.range(of: g.pattern, options: .regularExpression) != nil {
+        for g in groups + connectors where g.always || extra.contains(g.name) || matched.contains(g.name) {
             names.formUnion(g.tools)
         }
         // Tools the model already used in this chat stay available (follow-ups like "now reply to it").
         for m in conversation.suffix(40) { for c in m.toolCalls ?? [] { names.insert(c.name) } }
         return all.filter { names.contains($0.name) }
+    }
+
+    /// Groups whose keywords appear in the last two user messages (not always-on ones, not more_tools).
+    static func keywordGroups(_ conversation: [ChatMessage], connectors: [Group] = []) -> Set<String> {
+        let users = conversation.filter { $0.role == .user && $0.toolCallId == nil }.suffix(2)
+        let text = users.map { routingText($0.text) }.joined(separator: "\n").lowercased()
+        return Set((groups + connectors).filter { text.range(of: $0.pattern, options: .regularExpression) != nil }.map(\.name))
     }
 
     /// What a message is about: what was typed, plus the start of what the app attached

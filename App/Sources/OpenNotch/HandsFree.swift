@@ -49,6 +49,8 @@ final class HandsFree: ObservableObject {
     weak var backend: Backend?
     /// A tool approval we've asked about out loud.
     private var pendingApproval: Approval?
+    /// A question (`ask_user`) we've read out — the next thing said answers it.
+    private var pendingQuestion: Question?
     /// Asked before starting, so push-to-talk dictation can release the mic.
     var willStart: (() -> Void)?
     /// macOS is about to show a permission prompt — get out of its way.
@@ -200,7 +202,7 @@ final class HandsFree: ObservableObject {
             }
         case .speechIdle:
             speechLevel = 0
-            if phase == .speaking && (turnDone || pendingApproval != nil) {
+            if phase == .speaking && (turnDone || pendingApproval != nil || pendingQuestion != nil) {
                 lastActivity = Date()
                 listen()                                   // turn over, or waiting for a spoken yes/no
             } else if phase == .speaking && backend?.busy == true {
@@ -321,6 +323,17 @@ final class HandsFree: ObservableObject {
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         transcript = ""
         guard !text.isEmpty else { listen(); return }
+        // Waiting on an answer to a question: an option if it names one, else the user's own words.
+        // "Stop" / "goodbye" still end hands-free (the question is then skipped).
+        if let q = pendingQuestion, VoiceTurn.command(text) != .exit {
+            pendingQuestion = nil
+            if backend?.question?.id == q.id {
+                let pick = AskLogic.match(text, options: q.options)
+                backend?.answer(q, with: pick ?? text, chosen: pick != nil)
+                say(pick.map { "Okay, \($0)." } ?? "Okay.", partOfAnswer: false)
+                return
+            }
+        }
         // Waiting on a yes/no for a tool: answer it, and never send this to the model.
         if let a = pendingApproval {
             guard backend?.approvals.contains(where: { $0.id == a.id }) == true else {
@@ -343,6 +356,13 @@ final class HandsFree: ObservableObject {
             return
         }
         commit(text: text)
+    }
+
+    /// The assistant asked a question: read it with its options and listen for the answer.
+    func questionAsked(_ q: Question) {
+        guard isOn else { return }
+        pendingQuestion = q
+        say(q.spoken, partOfAnswer: false)
     }
 
     /// A tool needs permission: ask out loud and listen for yes / no.

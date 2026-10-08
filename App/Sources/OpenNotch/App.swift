@@ -20,6 +20,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let health = HealthMonitor()
     private let privacyMonitor = PrivacyMonitor()
     private var scheduleTimer: Timer?
+    private var watchRunning = false
+
+    /// Runs one due watcher in the background (read-only tools); tells the user when it's met, blocked or expired.
+    /// Returns false when nothing was due.
+    @discardableResult
+    private func runDueWatch() -> Bool {
+        guard !watchRunning, let w = WatchLogic.due(WatchStore.shared.all(), now: Date()) else { return false }
+        watchRunning = true
+        let core = backend.core
+        Task { @MainActor [weak self] in
+            defer { self?.watchRunning = false }
+            let answer: String
+            do { answer = try await core.completeWithTools(WatchLogic.prompt(w), toolNames: WatchLogic.checkTools, maxCalls: 8) }
+            catch { AppLog.write("watch \(w.id): check failed — \(error.localizedDescription)"); var t = w; t.lastRun = Date(); WatchStore.shared.update(t); return }
+            let next = WatchLogic.after(w, WatchLogic.verdict(answer), now: Date())
+            WatchStore.shared.update(next)
+            AppLog.write("watch \(w.id): check \(next.checks) → \(next.phase.rawValue)")
+            if next.phase != .active { self?.hub.proactive.proposeWatch(next, answer: answer) }
+        }
+        return true
+    }
 
     func applicationDidFinishLaunching(_ note: Notification) {
         FrontApp.startTracking()                 // screen_text reads the app you were in, not the notch
@@ -70,6 +91,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+            self.notch.expand(pinned: true)
+        }
+        backend.onQuestion = { [weak self] q in
+            guard let self else { return }
+            Chime.attention()
+            self.handsFree.questionAsked(q)
+            self.hub.module = .chat
             self.notch.expand(pinned: true)
         }
         backend.onTextDelta = { [weak self] d in self?.handsFree.feed(d) }
@@ -220,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 guard let self, !self.backend.busy, self.backend.aiConnected else { return }
                 guard let task = ScheduleStore.shared.takeDue().first else {
-                    self.backend.core.learnIfIdle()            // a quiet chat: anything worth remembering?
+                    if !self.runDueWatch() { self.backend.core.learnIfIdle() }   // a quiet chat: anything worth remembering?
                     return
                 }
                 self.backend.core.send(task.prompt, display: "⏰ " + task.prompt)
@@ -396,6 +424,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Snapshot what you're working on the moment the notch opens.
         notch.onOpen = { [weak ctx, weak self] in
             ctx?.refresh()
+            Decider.prewarm()                                     // the routing model is ready by the time you've typed
             if self?.backend.unseenAnswer == true {               // opened to see the result
                 self?.backend.unseenAnswer = false
                 self?.hub.module = .chat
@@ -530,6 +559,49 @@ struct OpenNotchMain {
             }
             exit(0)
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--probe-decide") {   // dev: routing decider vs keywords
+            // `--probe-decide [apple|jev] ["message"]` — no message: paraphrases the keywords miss + the eval prompts.
+            // jev spends OpenRouter credit (≈ $0.00006 a message).
+            let rest = Array(CommandLine.arguments.dropFirst(i + 1))
+            let engine = rest.first.flatMap(DecisionLogic.Engine.init(rawValue:)) ?? .apple
+            let text = rest.first.flatMap(DecisionLogic.Engine.init(rawValue:)) == nil ? rest.first : rest.dropFirst().first
+            let hard: [(String, String)] = [
+                ("Is it going to pour in Mumbai later?", "weather"), ("What's on my plate this afternoon?", "calendar"),
+                ("Crank up the tunes", "music"), ("Don't let my laptop nap for the next hour", "awake"),
+                ("Ping Sam on iMessage that I'm running late", "shortcuts"), ("Where's that contract Priya sent over?", "find"),
+                ("What does the doc I have open say about pricing?", "screen"), ("Jot this in Apple's notes app: buy milk", "notes_app"),
+                ("Has Priya written back to me?", "mail"), ("Remind me about this every Friday at 5", "schedule"),
+            ]
+            let cases: [(String, String?)] = text.map { [($0, nil)] } ?? hard.map { ($0.0, $0.1) } + EvalCase.cases.map { ($0.prompt, nil) }
+            Task { @MainActor in
+                if CommandLine.arguments.contains("--prewarm") {           // measure what the notch-open prewarm buys
+                    Decider.prewarm()
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                }
+                let groups = DecisionLogic.candidates(connectors: [])
+                var keyHits = 0, bothHits = 0, hardCount = 0, totalMs = 0
+                for (msg, want) in cases {
+                    let kw = ToolRouter.groups.filter { msg.lowercased().range(of: $0.pattern, options: .regularExpression) != nil }.map(\.name)
+                    let t0 = Date()
+                    let r = await Decider.decide(engine, message: msg, groups: groups, timeout: 10)
+                    let ms = Int(Date().timeIntervalSince(t0) * 1000); totalMs += ms
+                    let got = (try? r.get()) ?? []
+                    var line = "\(ms) ms · keywords [\(kw.joined(separator: ","))] · \(engine.rawValue) "
+                    switch r { case .success: line += "[\(got.joined(separator: ","))]"; case .failure(let e): line += "FAILED \(e.localizedDescription)" }
+                    if let want {
+                        hardCount += 1
+                        if kw.contains(want) { keyHits += 1 }
+                        if kw.contains(want) || got.contains(want) { bothHits += 1 }
+                        line += " · want \(want)"
+                    }
+                    print(line + " · " + msg)
+                }
+                if hardCount > 0 { print("paraphrases: keywords \(keyHits)/\(hardCount) · keywords + \(engine.rawValue) \(bothHits)/\(hardCount)") }
+                print("average \(totalMs / max(cases.count, 1)) ms")
+                exit(0)
+            }
+            RunLoop.main.run()
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--probe-search") {   // dev: one web search via Parallel, then web_search
             let q = CommandLine.arguments.dropFirst(i + 1).first ?? "latest Swift release"
             Task {
@@ -578,7 +650,8 @@ struct OpenNotchMain {
             let args = Array(CommandLine.arguments.dropFirst(i + 1))
             Task { @MainActor in
                 FrontApp.startTracking()
-                let all = ToolKit.all() + DailyTools.all() + MacTools.all()
+                let base = ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all()
+                let all = base + [ScriptLogic.tool { base }]
                 guard let name = args.first, let tool = all.first(where: { $0.name == name }), tool.risk == .read else {
                     print("give a read-only tool name"); exit(2)
                 }
@@ -639,7 +712,7 @@ extension AppDelegate {
                 guard let self else { return }
                 guard self.backend.busy, let started = self.backend.turnStarted else { level = 0; turn = nil; return }
                 if turn != started { turn = started; level = 0 }
-                guard !self.handsFree.isOn, self.backend.approvals.isEmpty,
+                guard !self.handsFree.isOn, !self.backend.needsUser,
                       let n = VoiceTurn.slowNotice(elapsed: Date().timeIntervalSince(started), tool: self.backend.lastTool),
                       n.level > level else { return }
                 level = n.level

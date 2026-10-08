@@ -151,7 +151,7 @@ final class NotchController: ObservableObject {
 
     /// Something worth showing in the closed notch's ears.
     var hasLiveActivity: Bool {
-        hud != nil || (backend?.busy ?? false) || !(backend?.approvals.isEmpty ?? true)
+        hud != nil || (backend?.busy ?? false) || (backend?.needsUser ?? false)
             || (handsFree?.isOn ?? false) || (backend?.unseenAnswer ?? false) || hub?.timers.kind != nil
             || (backend?.nowPlaying.playing ?? false) || KeepAwake.shared.isOn || privacy.active
     }
@@ -204,7 +204,7 @@ final class NotchController: ObservableObject {
     /// What the ears are showing, highest priority first.
     var earActivity: EarActivity {
         if hud != nil { return .hud }
-        if (backend?.busy ?? false) || !(backend?.approvals.isEmpty ?? true) || (handsFree?.isOn ?? false)
+        if (backend?.busy ?? false) || (backend?.needsUser ?? false) || (handsFree?.isOn ?? false)
             || (backend?.unseenAnswer ?? false) { return .agent }
         if hub?.timers.kind != nil { return .timer }
         if backend?.nowPlaying.playing ?? false { return .music }
@@ -217,7 +217,7 @@ final class NotchController: ObservableObject {
     /// closed notch (like a split Dynamic Island), so a timer and music both stay visible.
     var otherActivities: [EarActivity] {
         Self.others(primary: earActivity,
-                    agent: (backend?.busy ?? false) || !(backend?.approvals.isEmpty ?? true)
+                    agent: (backend?.busy ?? false) || (backend?.needsUser ?? false)
                         || (handsFree?.isOn ?? false) || (backend?.unseenAnswer ?? false),
                     timer: hub?.timers.kind != nil, music: backend?.nowPlaying.playing ?? false,
                     awake: KeepAwake.shared.isOn)
@@ -293,7 +293,7 @@ final class NotchController: ObservableObject {
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             Task { @MainActor in
                 guard let self, [.expanded, .player, .mirror, .peekaboo].contains(self.mode),
-                      self.backend?.approvals.isEmpty ?? true else { return }
+                      !(self.backend?.needsUser ?? false) else { return }
                 self.collapse()
             }
         }
@@ -364,7 +364,7 @@ final class NotchController: ObservableObject {
                 withAnimation(Motion.close) { mode = .collapsed }
             }
         case .expanded:
-            let holding = pinned || dragging || menuOpen || !(backend?.approvals.isEmpty ?? true)
+            let holding = pinned || dragging || menuOpen || (backend?.needsUser ?? false)
             if over || holding {
                 leftAt = nil
             } else if leftAt == nil {

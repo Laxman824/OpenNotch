@@ -14,6 +14,8 @@ struct Item: Identifiable, Equatable {
         case thinking
         /// The agent's current plan (todo_write), updated in place.
         case plan([PlanStep])
+        /// Files the turn created or changed (shown at its end).
+        case files([ChangedFile])
     }
     let id: String
     var kind: Kind
@@ -118,6 +120,10 @@ struct Approval: Identifiable, Equatable {
 final class Backend: ObservableObject {
     @Published var items: [Item] = []
     @Published var approvals: [Approval] = []
+    /// A choice the assistant is waiting on (`ask_user`).
+    @Published var question: Question?
+    /// The assistant is waiting on the user (an approval or a question): the notch holds open and glows.
+    var needsUser: Bool { !approvals.isEmpty || question != nil }
     @Published var busy = false
     @Published var provider = ""
     @Published var model = ""
@@ -166,6 +172,8 @@ final class Backend: ObservableObject {
     var onDone: ((String) -> Void)?
     /// Fired when the agent needs a yes/no, so the notch can open itself.
     var onApproval: (() -> Void)?
+    /// Fired when the agent asks a question (`ask_user`).
+    var onQuestion: ((Question) -> Void)?
 
     /// True once an AI is connected (Settings › AI).
     var aiConnected: Bool { core.provider.isConnected }
@@ -196,6 +204,12 @@ final class Backend: ObservableObject {
     func send(_ text: String, voice: Bool = false) {
         var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty || !attachments.isEmpty else { return }
+        // Typed while a question is open: that's the answer, not a new message.
+        if let q = question, !t.isEmpty {
+            let pick = AskLogic.match(t, options: q.options)
+            answer(q, with: pick ?? t, chosen: pick != nil)
+            return
+        }
         // Quick capture ("remind me…", "note: …") is handled locally, instantly.
         if attachments.isEmpty, !t.hasPrefix("/"), !busy, let reply = interceptor?(t) {
             sentHistory.append(t)
@@ -402,6 +416,12 @@ final class Backend: ObservableObject {
     func deleteChat(_ id: String) { core.deleteChat(id) }
     func newChat() { core.newChat() }
 
+    /// Answers the open question: an option (`chosen`), the user's own words, or nil to skip it.
+    func answer(_ q: Question, with text: String?, chosen: Bool) {
+        if question?.id == q.id { question = nil }
+        core.answerQuestion(id: q.id, answer: text, chosen: chosen)
+    }
+
     func answer(_ approval: Approval, allow: Bool, forChat: Bool = false) {
         approvals.removeAll { $0.id == approval.id }
         core.approve(id: approval.id, allow: allow, forChat: forChat)
@@ -488,6 +508,15 @@ final class Backend: ObservableObject {
             onApproval?()
         case "approval_done":
             approvals.removeAll { $0.id == ev["id"] as? String }
+        case "question":
+            let q = Question(id: ev["id"] as? String ?? "", text: ev["text"] as? String ?? "",
+                             options: ev["options"] as? [String] ?? [], detail: ev["detail"] as? String)
+            closeThinking()
+            closeStreaming()
+            question = q
+            onQuestion?(q)
+        case "question_done":
+            if question?.id == ev["id"] as? String { question = nil }
         case "done":
             closeThinking()
             planProgress = nil
@@ -516,6 +545,13 @@ final class Backend: ObservableObject {
                 items[i].meta = Self.stats(ev)
             }
             onDone?(text)
+        case "files":
+            let files = FileChangeLogic.parse(ev)
+            if !files.isEmpty {
+                closeStreaming()
+                counter += 1
+                items.append(Item(id: "i\(counter)", kind: .files(files), text: ""))
+            }
         case "info":
             add(.info, ev["text"] as? String ?? "")
         case "error":
@@ -545,11 +581,13 @@ final class Backend: ObservableObject {
             followUps = []
             items = []
             approvals = []
+            question = nil
             planProgress = nil
         case "reload":                                    // another chat was opened
             followUps = []
             items = []
             approvals = []
+            question = nil
             planProgress = nil
             for h in core.history { add(h.role == "user" ? .user : .assistant, h.text) }
         default:

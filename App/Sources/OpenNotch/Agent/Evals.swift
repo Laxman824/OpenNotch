@@ -18,6 +18,7 @@ struct EvalCase: Sendable {
 
     static let cases: [EvalCase] = [
         EvalCase(name: "weather", prompt: "Will I need an umbrella in Paris tomorrow?", all: ["weather"]),
+        EvalCase(name: "watch", prompt: "Let me know when the Swift 7 release notes are published", all: ["watch_start"]),
         EvalCase(name: "plan-day", prompt: "Plan my day", all: ["calendar_events", "reminders_list"]),
         EvalCase(name: "past-chat", prompt: "What did we decide about the logo colours last time we talked about it?", all: ["search_chats"]),
         EvalCase(name: "find-file", prompt: "Find the invoice PDF I downloaded recently", any: ["find_files", "run_command", "list_directory"]),

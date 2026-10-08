@@ -814,6 +814,39 @@ private struct SearchSection: View {
     }
 }
 
+/// Settings › AI › Tool picking: keywords alone, plus Apple's on-device model (free, default), or Jev (paid, opt-in).
+private struct DeciderSection: View {
+    @State private var choice = UserDefaults.standard.string(forKey: DecisionLogic.pref) ?? DecisionLogic.Engine.apple.rawValue
+    private let apple = AppleOnDeviceProvider.availability
+    private let hasKey = !(ProviderStore.key(for: .openrouter) ?? "").isEmpty
+
+    var body: some View {
+        Section(title: "Tool picking") {
+            Picker("", selection: Binding(get: { choice },
+                                          set: { choice = $0; UserDefaults.standard.set($0, forKey: DecisionLogic.pref) })) {
+                Text("Apple on-device (free, private)").tag("apple")
+                Text("Jev via OpenRouter (paid, opt-in)").tag("jev")
+                Text("Keywords only").tag("off")
+            }
+            .labelsHidden().frame(width: 260)
+            HStack(spacing: 4) {
+                switch choice {
+                case "apple":
+                    Text(apple.map { "Not available: \($0) Keywords are used meanwhile." }
+                         ?? "Before each message, Apple's model on this Mac adds tools the keywords missed. Nothing leaves your Mac.")
+                case "jev":
+                    Text(hasKey ? "Sends only what you typed (up to 1,000 characters) to OpenRouter and TypeSafe. About $0.00006 a message from your OpenRouter credit."
+                                : "Needs an OpenRouter key with credit (connect OpenRouter above). Keywords are used meanwhile.")
+                    Link("Jev ↗", destination: URL(string: "https://openrouter.ai/typesafe/jev-1.13")!)
+                default:
+                    Text("Tools are picked by keywords in your message, as before.")
+                }
+            }
+            .font(.system(size: 11)).foregroundStyle(Theme.secondary)
+        }
+    }
+}
+
 /// Settings › AI › Routines: saved jobs you start by saying their name — run, add to Apple Shortcuts, delete.
 private struct RoutinesSection: View {
     @State private var items = RoutineStore.shared.all()
@@ -1094,6 +1127,7 @@ private struct AIPane: View {
         }
 
         SearchSection()
+        DeciderSection()
         MemorySection()
 
         RoutinesSection()

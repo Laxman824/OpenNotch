@@ -204,8 +204,12 @@ enum ToolKit {
                                                     withIntermediateDirectories: true)
             try content.write(toFile: path, atomically: true, encoding: .utf8)
         } catch { return .fail("Couldn't write \(path): \(error.localizedDescription)") }
+        // Confirm the effect, not the call (rule 19): read it back.
+        guard (try? String(contentsOfFile: path, encoding: .utf8)) == content else {
+            return .fail("Wrote \(path), but reading it back doesn't match what was written — check the file.")
+        }
         await FileState.shared.record(path)
-        return ToolOutcome(ok: true, text: "Wrote \(content.count) characters to \(path).")
+        return ToolOutcome(ok: true, text: "Wrote \(content.count) characters to \(path) (checked).")
     }
 
     static func editFile(_ a: ToolArgs) async -> ToolOutcome {
@@ -225,6 +229,9 @@ enum ToolKit {
             : text.replacingCharacters(in: text.range(of: old)!, with: new)
         do { try out.write(toFile: path, atomically: true, encoding: .utf8) }
         catch { return .fail("Couldn't write \(path): \(error.localizedDescription)") }
+        guard (try? String(contentsOfFile: path, encoding: .utf8)) == out else {
+            return .fail("Edited \(path), but reading it back doesn't match — check the file.")
+        }
         await FileState.shared.record(path)
         return ToolOutcome(ok: true, text: "Edited \(path) (\(a.bool("replace_all") ? count : 1) replacement\(count == 1 ? "" : "s")).")
     }
@@ -264,9 +271,11 @@ enum ToolKit {
                          env: ["PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"])
         var out = r.out
         if !r.err.isEmpty { out += (out.isEmpty ? "" : "\n") + "[stderr]\n" + r.err }
-        if out.count > 20_000 { out = String(out.prefix(12_000)) + "\n… [output trimmed] …\n" + String(out.suffix(6_000)) }
-        let note = r.timedOut ? "Stopped after \(Int(timeout)) s (timeout)." : "Exit code \(r.status)."
-        return ToolOutcome(ok: r.status == 0 && !r.timedOut, text: note + (out.isEmpty ? " (no output)" : "\n" + out))
+        // Timed out and exit code are separate facts: a command can be stopped and still exit 0.
+        let note = (r.timedOut ? "Stopped after \(Int(timeout)) s (timeout). " : "") + "Exit code \(r.status)."
+        // Long output keeps its head and tail; the full text goes to a spill file (nothing cut silently).
+        return ResultBudget.apply(ToolOutcome(ok: r.status == 0 && !r.timedOut, text: note + (out.isEmpty ? " (no output)" : "\n" + out)),
+                                  tool: "run_command", limit: 20_000)
     }
 
     // MARK: Web
@@ -696,9 +705,16 @@ enum ToolKit {
         e.startDate = start
         e.endDate = parseDate(a.str("end")) ?? start.addingTimeInterval(3600)
         e.notes = a.str("notes")
-        e.calendar = eventStore.defaultCalendarForNewEvents
+        guard let cal = eventStore.defaultCalendarForNewEvents else {
+            return .fail("There's no default calendar to add to — pick one in Calendar › Settings › General.")
+        }
+        e.calendar = cal
         do { try eventStore.save(e, span: .thisEvent) } catch { return .fail("Couldn't save the event: \(error.localizedDescription)") }
-        return ToolOutcome(ok: true, text: "Added “\(title)” on \(DateFormatter.localizedString(from: start, dateStyle: .medium, timeStyle: .short)).")
+        // Confirm it's really in the calendar (rule 19).
+        guard let id = e.eventIdentifier, eventStore.event(withIdentifier: id) != nil else {
+            return .fail("Calendar accepted the event but it can't be found afterwards — check the \(cal.title) calendar.")
+        }
+        return ToolOutcome(ok: true, text: "Added “\(title)” to \(cal.title) on \(DateFormatter.localizedString(from: start, dateStyle: .medium, timeStyle: .short)) (checked).")
     }
 
     static func createReminder(_ a: ToolArgs) -> ToolOutcome {
@@ -708,13 +724,19 @@ enum ToolKit {
         guard let title = a.str("title") else { return .fail("title is required.") }
         let r = EKReminder(eventStore: eventStore)
         r.title = title
-        r.calendar = eventStore.defaultCalendarForNewReminders()
+        guard let list = eventStore.defaultCalendarForNewReminders() else {
+            return .fail("There's no default Reminders list — pick one in Reminders › Settings.")
+        }
+        r.calendar = list
         if let due = parseDate(a.str("due")) {
             r.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: due)
             r.addAlarm(EKAlarm(absoluteDate: due))
         }
         do { try eventStore.save(r, commit: true) } catch { return .fail("Couldn't save the reminder: \(error.localizedDescription)") }
-        return ToolOutcome(ok: true, text: "Reminder added: “\(title)”.")
+        guard eventStore.calendarItem(withIdentifier: r.calendarItemIdentifier) != nil else {
+            return .fail("Reminders accepted it but it can't be found afterwards — check the \(list.title) list.")
+        }
+        return ToolOutcome(ok: true, text: "Reminder added to \(list.title): “\(title)” (checked).")
     }
 
     // MARK: Memory
@@ -777,13 +799,23 @@ enum ToolKit {
 enum Proc {
     struct Result { var status: Int32; var out: String; var err: String; var timedOut = false }
 
+    /// The environment minus anything that looks like a credential (names containing KEY, SECRET, TOKEN,
+    /// PASSWORD/PASSWD or CREDENTIAL). SSH_AUTH_SOCK stays: it's a socket path git needs, not a secret.
+    nonisolated static func scrubbed(_ env: [String: String]) -> [String: String] {
+        env.filter { k, _ in
+            let u = k.uppercased()
+            return !["KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD", "CREDENTIAL"].contains { u.contains($0) }
+        }
+    }
+
     static func run(_ path: String, _ args: [String], cwd: String? = nil, timeout: TimeInterval = 10,
                     env: [String: String]? = nil) -> Result {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
         if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-        if let env { p.environment = ProcessInfo.processInfo.environment.merging(env) { _, n in n } }
+        // Never hand a command the app's secrets (a dev run's OPENNOTCH_KEY, any *_API_KEY in launchd's env).
+        p.environment = scrubbed(ProcessInfo.processInfo.environment).merging(env ?? [:]) { _, n in n }
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err

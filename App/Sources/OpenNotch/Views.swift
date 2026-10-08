@@ -162,7 +162,7 @@ struct RootView: View {
             .frame(width: size.width, height: size.height)
             .overlay {
                 // A tool is waiting for an OK while the notch is closed: pulse yellow.
-                if isTucked && !backend.approvals.isEmpty { ApprovalGlow(radius: radius) }
+                if isTucked && backend.needsUser { ApprovalGlow(radius: radius) }
             }
             // Fixed radius, animated opacity only: re-blurring a changing
             // radius every frame is what made the old open stutter.
@@ -212,7 +212,7 @@ struct RootView: View {
             }
         }
         .animation(Motion.open, value: backend.busy)
-        .animation(Motion.open, value: backend.approvals.isEmpty)
+        .animation(Motion.open, value: backend.needsUser)
         .animation(Motion.open, value: notch.hasLiveActivity)
         .animation(Motion.open, value: notch.showsPerch)
         .animation(Motion.open, value: notch.earWidth)
@@ -489,7 +489,7 @@ struct CollapsedView: View {
             let np = backend.nowPlaying
             return "Now playing \(np.track)" + (np.artist.isEmpty ? "" : " by \(np.artist)")
         case .agent:
-            return !backend.approvals.isEmpty ? "\(Prefs.name) needs your approval" : backend.busy ? "\(Prefs.name) is working"
+            return !backend.approvals.isEmpty ? "\(Prefs.name) needs your approval" : backend.question != nil ? "\(Prefs.name) has a question" : backend.busy ? "\(Prefs.name) is working"
                 : handsFree.isOn ? "Hands-free on" : "\(Prefs.name)'s answer is ready"
         case .privacy:
             let p = notch.privacy
@@ -510,7 +510,16 @@ struct CollapsedView: View {
 
     /// Right ear while Ledge is involved: one word of status, highest priority first.
     @ViewBuilder private var right: some View {
-        if let a = backend.approvals.first {
+        if backend.approvals.isEmpty, backend.question != nil {
+            VStack(alignment: .leading, spacing: -1) {
+                Text("QUESTION").font(.system(size: 8.5, weight: .heavy, design: .rounded)).tracking(0.8)
+                    .foregroundStyle(.cyan)
+                Text("Pick one").font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 4)
+        } else if let a = backend.approvals.first {
             VStack(alignment: .leading, spacing: -1) {
                 Text("NEEDS YOUR OK").font(.system(size: 8.5, weight: .heavy, design: .rounded)).tracking(0.8)
                     .foregroundStyle(.yellow)
@@ -644,6 +653,10 @@ struct ExpandedView: View {
                 }
                 .padding(.horizontal, 14).padding(.top, 6)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let q = backend.question {
+                QuestionCard(question: q, backend: backend)
+                    .padding(.horizontal, 14).padding(.top, 6)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if hub.module == .chat && !handsFree.isOn {
                 composer
@@ -651,6 +664,7 @@ struct ExpandedView: View {
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: backend.approvals)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: backend.question)
         .onAppear { if isOpen && notch.focusInput { focusSoon() } }
         .onChange(of: isOpen) { open in
             if open { if notch.focusInput { focusSoon() } } else { inputFocused = false }
@@ -1432,6 +1446,8 @@ struct ItemRow: View {
             ThinkingRow(item: item)
         case let .plan(steps):
             PlanCard(steps: steps)
+        case let .files(files):
+            ChangedFilesCard(files: files)
         case .info:
             Text(item.text)
                 .font(.system(size: 11))
@@ -1448,6 +1464,58 @@ struct ItemRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.1)))
         }
+    }
+}
+
+/// `ask_user`: the question and up to four answers as buttons (⌘1–⌘4). Typing in the
+/// composer answers it too; Skip tells the assistant to go on without.
+struct QuestionCard: View {
+    let question: Question
+    @ObservedObject var backend: Backend
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "questionmark.bubble.fill").foregroundStyle(.cyan)
+                Text(question.text).foregroundStyle(.white).fontWeight(.semibold)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.system(size: 12.5))
+            if let d = question.detail {
+                Text(d).font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(4)
+            }
+            VStack(spacing: 5) {
+                ForEach(Array(question.options.enumerated()), id: \.offset) { i, o in
+                    Button { backend.answer(question, with: o, chosen: true) } label: {
+                        HStack(spacing: 8) {
+                            Text("\(i + 1)").font(.system(size: 10, weight: .bold, design: .rounded)).monospacedDigit()
+                                .foregroundStyle(.black.opacity(0.7))
+                                .frame(width: 17, height: 17).background(Circle().fill(.cyan.opacity(0.85)))
+                            Text(o).font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
+                                .lineLimit(2).multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(0.07)))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)   // not bare digits: they'd fire while typing
+                }
+            }
+            HStack {
+                Text("Or type your own answer below").font(.system(size: 10.5)).foregroundStyle(Theme.tertiary)
+                Spacer()
+                Button { backend.answer(question, with: nil, chosen: false) } label: {
+                    Text("Skip").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.cyan.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.cyan.opacity(0.3)))
     }
 }
 
@@ -1821,6 +1889,83 @@ struct ShimmerText: View {
 }
 
 /// The agent's plan, as a live checklist with progress.
+/// What a turn made or changed: open, show in Finder, drag out, or park on the Shelf.
+struct ChangedFilesCard: View {
+    let files: [ChangedFile]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.badge.ellipsis").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.glow[0])
+                Text(files.count == 1 ? "1 file changed" : "\(files.count) files changed").font(.system(size: 12, weight: .bold))
+                Spacer()
+                if files.count > 1 {
+                    Button("Add all to Shelf") { Self.shelve(files) }
+                        .buttonStyle(.plain).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.secondary)
+                }
+            }
+            ForEach(files.prefix(8)) { FileLine(file: $0) }
+            if files.count > 8 {
+                Text("and \(files.count - 8) more").font(.system(size: 10.5)).foregroundStyle(Theme.tertiary)
+            }
+        }
+        .padding(11)
+        .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.hairline))
+    }
+
+    static func shelve(_ files: [ChangedFile]) {
+        let urls = files.map { URL(fileURLWithPath: $0.path) }.filter { FileManager.default.fileExists(atPath: $0.path) }
+        (NSApp.delegate as? AppDelegate)?.hub.shelf.add(urls)
+    }
+
+    private struct FileLine: View {
+        let file: ChangedFile
+        @State private var hover = false
+
+        var body: some View {
+            let exists = FileManager.default.fileExists(atPath: file.path)
+            HStack(spacing: 8) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: file.path)).resizable().frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(file.name).font(.system(size: 12, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+                    Text((file.path as NSString).deletingLastPathComponent.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                        .font(.system(size: 10)).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
+                }
+                Spacer(minLength: 6)
+                if hover && exists {
+                    Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) } label: {
+                        Image(systemName: "folder").font(.system(size: 11))
+                    }.buttonStyle(.plain).help("Show in Finder")
+                    Button { ChangedFilesCard.shelve([file]) } label: {
+                        Image(systemName: "tray.and.arrow.down").font(.system(size: 11))
+                    }.buttonStyle(.plain).help("Add to Shelf")
+                }
+                Group {
+                    if !exists { Text("deleted").foregroundStyle(.orange) }
+                    else if file.created { Text("new").foregroundStyle(.green) }
+                    else if file.uncounted { Text("changed").foregroundStyle(Theme.secondary) }
+                    else {
+                        HStack(spacing: 4) {
+                            Text("+\(file.added)").foregroundStyle(.green)
+                            Text("−\(file.deleted)").foregroundStyle(.red.opacity(0.85))
+                        }
+                    }
+                }
+                .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+            }
+            .foregroundStyle(Theme.secondary)
+            .padding(.horizontal, 6).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(hover ? 0.06 : 0)))
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
+            .onTapGesture { if exists { NSWorkspace.shared.open(URL(fileURLWithPath: file.path)) } }
+            .onDrag { NSItemProvider(contentsOf: URL(fileURLWithPath: file.path)) ?? NSItemProvider() }
+            .help(exists ? "Open · drag it anywhere" : file.path)
+        }
+    }
+}
+
 struct PlanCard: View {
     let steps: [PlanStep]
 

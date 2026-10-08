@@ -130,15 +130,21 @@ enum ResultBudget {
 
     /// Long results keep their head and tail; the full text is saved to a file
     /// the model is told about — nothing is cut silently.
-    static func apply(_ o: ToolOutcome, tool: String) -> ToolOutcome {
-        guard o.text.count > maxChars else { return o }
-        let dir = opennotchDir("spill")
-        let f = dir + "/\(tool)_\(Int(Date().timeIntervalSince1970)).txt"
-        try? o.text.write(toFile: f, atomically: true, encoding: .utf8)
+    static func apply(_ o: ToolOutcome, tool: String, limit: Int = maxChars, dir: String? = nil) -> ToolOutcome {
+        guard o.text.count > limit else { return o }
+        let f = spillPath(dir: dir ?? opennotchDir("spill"), tool: tool)
+        // Owner-only, never an existing file (a random name can't collide or be planted).
+        FileManager.default.createFile(atPath: f, contents: Data(o.text.utf8), attributes: [.posixPermissions: 0o600])
         var r = o
-        r.text = String(o.text.prefix(maxChars * 3 / 4)) + "\n\n… [\(o.text.count - maxChars) characters omitted — full output saved to \(f); read it with read_file start_line/end_line] …\n\n"
-            + String(o.text.suffix(maxChars / 4))
+        r.text = String(o.text.prefix(limit * 3 / 4)) + "\n\n… [\(o.text.count - limit) characters omitted — full output saved to \(f); read it with read_file start_line/end_line] …\n\n"
+            + String(o.text.suffix(limit / 4))
         return r
+    }
+
+    /// `<tool>_<unix time>_<random>.txt` — two long results in the same second get different files.
+    static func spillPath(dir: String, tool: String) -> String {
+        let safe = tool.replacingOccurrences(of: "[^A-Za-z0-9_-]", with: "_", options: .regularExpression)
+        return dir + "/\(safe)_\(Int(Date().timeIntervalSince1970))_\(UUID().uuidString.prefix(8).lowercased()).txt"
     }
 }
 

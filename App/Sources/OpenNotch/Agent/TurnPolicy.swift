@@ -54,7 +54,7 @@ enum TurnPolicy {
     /// Tools whose results are text written by someone else (web pages, email, notes, MCP servers).
     static func isExternal(_ tool: String) -> Bool {
         ["fetch_url", "web_search", "mail_recent", "mail_read", "notes_search", "notes_read", "active_tab",
-         "screen_text", "shortcuts_run"].contains(tool)
+         "screen_text", "shortcuts_run", "run_script"].contains(tool)
             || tool.hasPrefix("mcp__")
     }
 

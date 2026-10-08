@@ -56,6 +56,13 @@ your files** by what's in them, who sent them and when ("the PDF Sarah sent last
 time I say *start work*, open Linear and Slack, turn on Focus and brief me" — then just say "start work", put it on a
 schedule, or **add it to Apple Shortcuts** with one click so Siri and your keyboard shortcuts can start it too.
 
+**Keeps an eye on things:** "let me know when Priya replies" or "tell me when it's back in stock" starts a **watcher**
+that checks in the background (read-only, it never acts) and drops a notice from the notch when it happens. When a choice
+is yours ("which Sam?"), it **asks with buttons** instead of guessing; when it edits files, the answer ends with a
+**card of what changed** (open it, drag it out, park it on the Shelf); and it can do **many lookups in one step**
+(weather for ten cities, the first lines of every file in a folder) with a small sandboxed script. With Apple
+Intelligence on, Apple's on-device model also helps it **pick the right tools** for oddly worded requests — free and private.
+
 **Free to start:** Apple's on-device AI works out of the box where available, and **Sign in with OpenRouter** gives
 free models in two clicks — no card.
 

@@ -123,7 +123,8 @@ enum AgentChecks {
         // Router: attached context counts, the stamp doesn't
         check("router: context counts", ToolRouter.routingText("sum it up" + ctx + "\nI'm looking at this web page: “x”").contains("web page"))
         check("router: stamp dropped", !ToolRouter.routingText("hi" + ctx + "\nSent: Thu 2 Oct").contains("Sent"))
-        let toolsAll = ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all() + [ToolRouter.moreTools]
+        let toolsAll = ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all() + RoutineTools.all() + WatchTools.all()
+            + [AskLogic.tool, ToolRouter.moreTools]
         for c in EvalCase.cases where !c.noTools {
             let names = Set(ToolRouter.select(toolsAll, conversation: [ChatMessage(role: .user, text: c.prompt)]).map(\.name))
             let ok = c.all.allSatisfy(names.contains) && (c.any.isEmpty || c.any.contains(where: names.contains))
@@ -636,6 +637,221 @@ enum AgentChecks {
               && routed("add it to Apple Shortcuts").contains("routine_export_shortcut"))
     }
 
+    /// Routing decider: engine choice (Jev never without being picked), what's sent, how answers are read.
+    private static func decider() {
+        typealias L = DecisionLogic
+        check("decider: Apple by default", L.engine(pref: nil, appleReady: true, hasOpenRouterKey: false) == .apple)
+        check("decider: keywords when Apple is off", L.engine(pref: nil, appleReady: false, hasOpenRouterKey: true) == nil)
+        check("decider: never Jev unless picked (must-NOT)", L.engine(pref: "apple", appleReady: false, hasOpenRouterKey: true) == nil)
+        check("decider: Jev when picked + key", L.engine(pref: "jev", appleReady: true, hasOpenRouterKey: true) == .jev)
+        check("decider: Jev without key = keywords", L.engine(pref: "jev", appleReady: true, hasOpenRouterKey: false) == nil)
+        check("decider: off", L.engine(pref: "off", appleReady: true, hasOpenRouterKey: true) == nil)
+        check("decider: only when keywords found nothing", L.shouldDecide(keywordGroups: []) && !L.shouldDecide(keywordGroups: ["mail"]))
+        check("decider: keyword groups", ToolRouter.keywordGroups([ChatMessage(role: .user, text: "check my email")]) == ["mail"]
+              && ToolRouter.keywordGroups([ChatMessage(role: .user, text: "Crank up the tunes")]).isEmpty)
+        check("decider: unknown pref = Apple", L.engine(pref: "zzz", appleReady: true, hasOpenRouterKey: false) == .apple)
+
+        // Only typed text is sent — never attached context, tool results or answers (must-NOT).
+        let secret = "SECRET-PAGE-TEXT"
+        let conv = [ChatMessage(role: .user, text: "first"), ChatMessage(role: .assistant, text: "ANSWER"),
+                    ChatMessage(role: .user, text: "older"), ChatMessage(role: .tool, text: "TOOLRESULT", toolCallId: "t"),
+                    ChatMessage(role: .user, text: TurnPolicy.stamped("reply to Sam" + AgentCore.contextMarker + "\n" + secret, at: Date()))]
+        let m = L.message(conv)
+        check("decider: last two typed messages", m == "older\nreply to Sam")
+        check("decider: no context, answers or tool output (must-NOT)",
+              !m.contains(secret) && !m.contains("ANSWER") && !m.contains("TOOLRESULT") && !m.contains("Sent:") && !m.contains("first"))
+        check("decider: message capped", L.message([ChatMessage(role: .user, text: String(repeating: "x", count: 5000) + "END")]).count == L.maxMessageChars
+              && L.message([ChatMessage(role: .user, text: String(repeating: "x", count: 5000) + "END")]).hasSuffix("END"))
+
+        let always = ToolRouter.Group(name: "notion", pattern: "x", tools: ["a"], always: true)
+        let conn = ToolRouter.Group(name: "linear", pattern: "x", tools: ["b"])
+        let cands = L.candidates(connectors: [always, conn])
+        check("decider: candidates skip always-on", !cands.contains { $0.name == "notion" } && cands.contains { $0.name == "linear" })
+        check("decider: every built-in group has words", ToolRouter.groups.allSatisfy { L.blurbs[$0.name] != nil })
+
+        // Jev request: only model, state (the message) and questions.
+        let body = L.jevBody(message: "hi", groups: cands)
+        check("decider: jev body keys (must-NOT extras)", Set(body.keys) == ["model", "state", "questions"])
+        check("decider: jev state = message only", (body["state"] as? [String: String]) == ["user_message": "hi"])
+        let qs = body["questions"] as? [String: [String: Any]] ?? [:]
+        check("decider: one noul per group", qs.count == cands.count && qs.values.allSatisfy { $0["type"] as? String == "noul" })
+        check("decider: jev body is valid JSON", !HTTP.json(body).isEmpty)
+
+        // Jev answers: threshold, order, cap; junk ignored.
+        func noul(_ p: Double) -> [String: Any] { ["type": "noul", "noul": p] }
+        var ans: [String: Any] = ["g1": noul(0.97), "g0": noul(0.2), "g5": noul(0.61), "zz": noul(1)]
+        check("decider: jev threshold + order", L.parseJev(["answers": ans], groups: cands) == [cands[1].name, cands[5].name])
+        for i in 6..<12 { ans["g\(i)"] = noul(0.9) }
+        check("decider: jev cap", L.parseJev(["answers": ans], groups: cands).count == L.maxGroups)
+        check("decider: jev junk", L.parseJev(["error": "x"], groups: cands).isEmpty
+              && L.parseJev(["answers": ["g0": ["noul": "yes"]]], groups: cands).isEmpty)
+
+        // Apple answers: known names only, no repeats, cap; bad JSON = nothing.
+        check("decider: apple parse", L.parseApple(json: #"{"groups":["mail","nope","mail","calendar"]}"#, groups: cands) == ["mail", "calendar"])
+        check("decider: apple cap", L.parseApple(json: #"{"groups":["mail","calendar","weather","music","awake"]}"#, groups: cands).count == L.maxGroups)
+        check("decider: apple junk", L.parseApple(json: "nope", groups: cands).isEmpty)
+        check("decider: apple prompt lists groups", L.applePrompt(message: "hi", groups: cands).contains("- linear: the connected service linear"))
+    }
+
+    /// ask_user: valid questions, and which answers pick an option (narrow: must-NOT cases).
+    private static func askUser() {
+        typealias A = AskLogic
+        func parsed(_ d: [String: Any]) -> A.Parsed? { try? A.parse(d).get() }
+        check("ask: valid", parsed(["question": " Which Sam? ", "options": ["Sam Lee", "Sam Park"]])
+              == A.Parsed(question: "Which Sam?", options: ["Sam Lee", "Sam Park"], detail: nil))
+        check("ask: needs 2 options", parsed(["question": "Which?", "options": ["Only"]]) == nil)
+        check("ask: duplicates collapse", parsed(["question": "Which?", "options": ["A", "a", " A "]]) == nil)
+        check("ask: max 4", parsed(["question": "Which?", "options": ["a", "b", "c", "d", "e"]]) == nil)
+        check("ask: needs a question", parsed(["options": ["a", "b"]]) == nil)
+        check("ask: long option trimmed", parsed(["question": "Q", "options": [String(repeating: "x", count: 90), "b"]])?.options[0].count == A.maxLabel)
+        check("ask: is core", ToolRouter.core.contains("ask_user"))
+
+        let sams = ["Sam Lee", "Sam Park", "Someone else"]
+        for (said, want) in [("Sam Lee", "Sam Lee"), ("sam park.", "Sam Park"), ("2", "Sam Park"), ("two", "Sam Park"),
+                             ("the second one", "Sam Park"), ("option 1", "Sam Lee"), ("number three", "Someone else"),
+                             ("first", "Sam Lee"), ("I'd like the first one please", "Sam Lee"), ("Sam Lee please", "Sam Lee"),
+                             ("go with Sam Park", "Sam Park")] {
+            check("ask: '\(said)' → \(want)", A.match(said, options: sams) == want)
+        }
+        // must-NOT: these are the user's own words, not a pick
+        for said in ["no", "Sam", "neither", "the one from work", "four", "one more thing", "Sam Lee or Sam Park, whichever replied last",
+                     "two of them", "the first one was wrong"] {
+            check("ask: '\(said)' picks nothing (must-NOT)", A.match(said, options: sams) == nil)
+        }
+        check("ask: ambiguous words pick nothing", A.match("Park please", options: ["Park", "Park Lane"]) == "Park")
+        check("ask: spoken", A.spoken("Which Sam?", options: ["Sam Lee", "Sam Park"])
+              == "Which Sam? Option 1: Sam Lee. Option 2: Sam Park. Or say something else.")
+        check("ask: result chosen", A.result(answer: "Sam Lee", chosen: true) == "The user chose: Sam Lee")
+        check("ask: result own words", A.result(answer: "the one from work", chosen: false).hasPrefix("The user answered in their own words"))
+        check("ask: result none", A.result(answer: nil, chosen: false).hasPrefix("The user didn't answer"))
+    }
+
+    /// The end-of-turn "files changed" card: line counts, created/failed files, the event round trip.
+    private static func changedFiles() async {
+        typealias F = FileChangeLogic
+        check("files: counts", F.counts(old: "a\nb\nc", new: "a\nB\nc\nd").map { [$0.added, $0.deleted] } == [2, 1])
+        check("files: new file", F.change(path: "/x", before: nil, after: "1\n2").created && F.change(path: "/x", before: nil, after: "1\n2").added == 2)
+        check("files: too long = uncounted", F.change(path: "/x", before: "", after: String(repeating: "l\n", count: 6000)).uncounted)
+        let ev = F.event([ChangedFile(path: "/a/b.txt", added: 3, deleted: 1, created: false)])
+        check("files: event round trip", F.parse(ev) == [ChangedFile(path: "/a/b.txt", added: 3, deleted: 1, created: false)])
+
+        let dir = NSTemporaryDirectory() + "opennotch-files-\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let old = dir + "/old.txt", fresh = dir + "/new.txt", untouched = dir + "/same.txt"
+        try? "one\ntwo".write(toFile: old, atomically: true, encoding: .utf8)
+        try? "x".write(toFile: untouched, atomically: true, encoding: .utf8)
+        let t = TurnFiles()
+        t.willWrite(old); t.willWrite(fresh); t.willWrite(untouched); t.willWrite(old)
+        try? "one\n2\nthree".write(toFile: old, atomically: true, encoding: .utf8)
+        try? "hi".write(toFile: fresh, atomically: true, encoding: .utf8)
+        t.failed(untouched)                                   // the write failed and nothing changed: not listed
+        let sum = t.summary()
+        check("files: order + no duplicates", sum.map(\.name) == ["old.txt", "new.txt"])
+        check("files: first before vs last after", sum.first.map { [$0.added, $0.deleted] } == [2, 1] && sum.first?.created == false)
+        check("files: created", sum.last?.created == true)
+        t.reset()
+        check("files: reset", t.summary().isEmpty)
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+
+    /// Watchers: validation, due order, the STATUS parser (narrow), endings, store, routing.
+    private static func watchers() {
+        typealias W = WatchLogic
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        func make(_ d: [String: Any]) -> Watch? { try? W.make(d, now: t0, id: "w1").get() }
+        let w = make(["what": "Apple Store page for the M5 Air", "until": "it says in stock"])
+        check("watch: defaults", w?.everyMinutes == 60 && w?.maxChecks == 168 && w?.expires == t0.addingTimeInterval(7 * 86_400))
+        check("watch: clamps", make(["what": "x", "until": "y", "every_minutes": 1, "days": 99]).map { [$0.everyMinutes, $0.maxChecks] } == [15, 200])
+        check("watch: needs what + until", make(["what": "x"]) == nil && make(["until": "y"]) == nil)
+
+        guard var a = w else { return }
+        check("watch: first check right away", W.due([a], now: t0)?.id == "w1")
+        a.lastRun = t0
+        check("watch: not before its interval", W.due([a], now: t0.addingTimeInterval(30 * 60)) == nil)
+        check("watch: due after it", W.due([a], now: t0.addingTimeInterval(60 * 60))?.id == "w1")
+        var paused = a; paused.phase = .paused
+        check("watch: paused never due", W.due([paused], now: t0.addingTimeInterval(9_999)) == nil)
+
+        check("watch: met", W.verdict("Looked.\nSTATUS: MET — In stock at $999") == .met("In stock at $999"))
+        check("watch: not yet", W.verdict("STATUS: NOT_YET - still sold out") == .notYet("still sold out"))
+        check("watch: blocked", W.verdict("status: blocked — needs a login") == .blocked("needs a login"))
+        check("watch: last STATUS wins", W.verdict("STATUS: MET — x\nSTATUS: NOT_YET — y") == .notYet("y"))
+        for text in ["It is MET now", "The condition is met.", "STATUS MET", "Sorry, I couldn't check.", "STATUS: maybe", ""] {
+            check("watch: '\(text)' isn't a verdict (must-NOT)", W.verdict(text) == .unclear)
+        }
+        let met = W.after(a, .met("in stock"), now: t0)
+        check("watch: met ends it", met.phase == .met && met.note == "in stock" && met.checks == 1)
+        var u = a
+        for _ in 0..<W.maxUnclear { u = W.after(u, .unclear, now: t0) }
+        check("watch: unclear 3× = blocked", u.phase == .blocked)
+        var last = a; last.checks = a.maxChecks - 1
+        check("watch: cap expires", W.after(last, .notYet("sold out"), now: t0).phase == .expired)
+        check("watch: date expires", W.after(a, .notYet("no"), now: a.expires).phase == .expired)
+        check("watch: not yet keeps going", W.after(a, .notYet("no"), now: t0).phase == .active)
+        check("watch: check tools are read-only", WatchTools.all().first { $0.name == "watch_start" }?.risk == .confirm
+              && (ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all())
+                .filter { W.checkTools.contains($0.name) }.allSatisfy { $0.risk == .read })
+
+        let path = NSTemporaryDirectory() + "opennotch-watch-\(UUID().uuidString).json"
+        let st = WatchStore(path: path)
+        check("watch: store add", st.add(a) == nil && st.all().map(\.id) == ["w1"])
+        st.update(met)
+        check("watch: store update", st.all().first?.phase == .met)
+        for i in 0..<W.maxActive { _ = st.add(make(["what": "x\(i)", "until": "y"]).map { var c = $0; c.id = "n\(i)"; return c }!) }
+        check("watch: max active", st.add(make(["what": "z", "until": "y"])!) != nil)
+        check("watch: remove", st.remove("w1") && !st.all().contains { $0.id == "w1" })
+        try? FileManager.default.removeItem(atPath: path)
+
+        func routed(_ text: String) -> Set<String> {
+            Set(ToolRouter.select(WatchTools.all() + [ToolRouter.moreTools], conversation: [ChatMessage(role: .user, text: text)]).map(\.name))
+        }
+        check("watch: routes", routed("let me know when Priya replies").contains("watch_start")
+              && routed("tell me as soon as the tickets go on sale").contains("watch_start"))
+        for text in ["what should I watch tonight", "my monitor keeps flickering", "I watched a great film", "let's watch the game"] {
+            check("watch: '\(text)' loads no watcher (must-NOT)", !routed(text).contains("watch_start"))
+        }
+    }
+
+    /// run_script: real JavaScriptCore runs against fixture tools — results, limits, the sandbox.
+    private static func scripts() async {
+        let fake = AgentTool(name: "weather", description: "", schema: Schema.object(["city": Schema.string("")]),
+                             risk: .read, verb: "", detail: { _ in "" }, preview: { _ in "" },
+                             run: { a in ToolOutcome(ok: true, text: "sunny in \(a.str("city") ?? "?")") })
+        let write = AgentTool(name: "write_file", description: "", schema: "{}", risk: .confirm, verb: "", detail: { _ in "" },
+                              preview: { _ in "" }, run: { _ in ToolOutcome(ok: true, text: "WROTE") })
+        let mail = AgentTool(name: "mail_read", description: "", schema: "{}", risk: .read, verb: "", detail: { _ in "" },
+                             preview: { _ in "" }, run: { _ in ToolOutcome(ok: true, text: "MAIL") })
+        let allowed = ScriptLogic.allowed([fake, write, mail])
+        check("script: only read-only parallel-safe tools (must-NOT)", allowed.map(\.name) == ["weather"])
+        check("script: engine time limit present", ScriptRunner.available)
+        check("script: core + fenced", ToolRouter.core.contains("run_script") && TurnPolicy.isExternal("run_script"))
+
+        func run(_ code: String, cpu: Double = 2) async -> (ok: Bool, text: String) { await ScriptRunner.run(code, tools: allowed, cpu: cpu) }
+        let v = await run("return 6 * 7")
+        check("script: return value", v.ok && v.text.hasPrefix("Returned:\n42"))
+        let one = await run(#"const r = await tools.weather({city: "Paris"}); return r.text"#)
+        check("script: tool call", one.ok && one.text.contains("sunny in Paris") && one.text.contains("weather ×1"))
+        let many = await run(#"const rs = await Promise.all(["A","B","C"].map(c => tools.weather({city: c}))); return rs.map(r => r.text)"#)
+        check("script: Promise.all", many.ok && many.text.contains("sunny in C") && many.text.contains("weather ×3"))
+        let blocked = await run(#"await tools.write_file({path: "/tmp/x", content: "y"}); return "wrote""#)
+        check("script: no write tools (must-NOT)", !blocked.ok && !blocked.text.contains("WROTE"))
+        let mailed = await run(#"return (await tools.mail_read({})).text"#)
+        check("script: no AppleScript tools (must-NOT)", !mailed.ok && !mailed.text.contains("MAIL"))
+        let sandbox = await run("return [typeof fetch, typeof XMLHttpRequest, typeof require, typeof setTimeout, typeof process].join(',')")
+        check("script: no network/files/timers", sandbox.text.contains("undefined,undefined,undefined,undefined,undefined"))
+        let t0 = Date()
+        let loop = await run("while (true) {}", cpu: 0.5)
+        check("script: endless loop stopped", !loop.ok && Date().timeIntervalSince(t0) < 5)
+        let thrown = await run(#"throw new Error("boom")"#)
+        check("script: errors are failures", !thrown.ok && thrown.text.contains("boom"))
+        let budget = await run("let n = 0; for (let i = 0; i < 35; i++) { if ((await tools.weather({city: 'x'})).ok) n++ } return n")
+        check("script: call budget", budget.text.contains("Returned:\n\(ScriptLogic.maxCalls)"))
+        let logged = await run(#"log("hi", {a: 1}); return null"#)
+        check("script: logs", logged.text.contains("hi {\"a\":1}"))
+        let nothing = await run("const x = 1")
+        check("script: nothing returned is said", nothing.text.contains("returned nothing"))
+    }
+
     static func run() async -> Int32 {
         // Context window
         var msgs: [ChatMessage] = [ChatMessage(role: .assistant, text: "orphan"), ChatMessage(role: .tool, text: "r", toolCallId: "x")]
@@ -653,6 +869,22 @@ enum AgentChecks {
         check("retry: body seconds", HTTP.retryDelay(header: nil, body: "Please try again in 11.0025s. Need more") == 11.0025)
         check("retry: header", HTTP.retryDelay(header: "3", body: "") == 3)
         check("retry: default", HTTP.retryDelay(header: nil, body: "overloaded") == 2)
+
+        // Commands never get the app's secrets; spill files never collide
+        let env = Proc.scrubbed(["PATH": "/bin", "OPENNOTCH_KEY": "k", "OPENAI_API_KEY": "k", "GITHUB_TOKEN": "t",
+                                 "DB_PASSWORD": "p", "AWS_SECRET_ACCESS_KEY": "s", "SSH_AUTH_SOCK": "/tmp/s", "HOME": "/h"])
+        check("env: secrets dropped (must-NOT)", Set(env.keys) == ["PATH", "SSH_AUTH_SOCK", "HOME"])
+        check("spill: unique names", ResultBudget.spillPath(dir: "/d", tool: "run_command") != ResultBudget.spillPath(dir: "/d", tool: "run_command"))
+        check("spill: safe name", ResultBudget.spillPath(dir: "/d", tool: "mcp__a/../b").hasPrefix("/d/mcp__a____b_"))
+        let long = ResultBudget.apply(ToolOutcome(ok: true, text: "HEAD" + String(repeating: "x", count: 30_000) + "TAIL"), tool: "checks_spill", limit: 20_000,
+                                        dir: NSTemporaryDirectory())
+        let spilled = long.text.range(of: #"saved to (\S+\.txt)"#, options: .regularExpression).map { String(long.text[$0].dropFirst(9)) }
+        check("spill: head + tail + file", long.text.hasPrefix("HEAD") && long.text.hasSuffix("TAIL") && long.text.count < 21_000)
+        if let f = spilled {
+            let perms = (try? FileManager.default.attributesOfItem(atPath: f))?[.posixPermissions] as? Int
+            check("spill: full text, owner-only", (try? String(contentsOfFile: f, encoding: .utf8))?.count == 30_008 && perms == 0o600)
+            try? FileManager.default.removeItem(atPath: f)
+        } else { check("spill: file named", false) }
 
         // Forbidden commands
         for c in ["rm -rf /", "rm -rf ~", "sudo ls", "dd if=x of=/dev/disk2", "diskutil eraseDisk APFS x disk2"] {
@@ -838,6 +1070,11 @@ enum AgentChecks {
         routines()
         presence()
         uxPolish()
+        decider()
+        askUser()
+        await changedFiles()
+        watchers()
+        await scripts()
 
         print(failed == 0 ? "agent: \(total)/\(total) pass" : "agent: \(failed) of \(total) FAILED")
         return failed == 0 ? 0 : 1
