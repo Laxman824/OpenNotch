@@ -18,6 +18,7 @@ VERSION="$(cat "$ROOT/VERSION")"
 BUILD="$ROOT/build"
 APP="$BUILD/OpenNotch.app"
 
+source "$ROOT/scripts/sdk.sh"
 cd "$ROOT/App"
 # Don't ship the builder's folder layout (home path, username) inside the binary.
 swift build -c release -Xswiftc -file-prefix-map -Xswiftc "$ROOT=/opennotch"

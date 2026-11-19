@@ -64,11 +64,14 @@ protocol ChatProvider: Sendable {
     var supportsImages: Bool { get }
     /// Roughly how much conversation (characters) to send — small for local models.
     var contextChars: Int { get }
+    /// Use the short system prompt (small on-device/local models).
+    var compactPrompt: Bool { get }
     func turn(system: String, messages: [ChatMessage], tools: [ToolSpec]) -> AsyncThrowingStream<ProviderEvent, Error>
 }
 
 extension ChatProvider {
     var contextChars: Int { 300_000 }
+    var compactPrompt: Bool { contextChars < 20_000 }
 }
 
 /// Until the user connects an AI: a friendly explanation, streamed like a real answer.

@@ -51,11 +51,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .init("dev.opennotch.toggle"), object: nil, userInfo: nil, deliverImmediately: true)
                 exit(0)
             }
-            Supervisor.handOverAndExit()
+            Supervisor.handOverOrStay()                    // returns only if launchd didn't take over
         }
         if Supervisor.isDuplicateInstance() {
-            // A copy handing over may still be exiting — give it a moment.
-            Thread.sleep(forTimeInterval: 1.2)
+            // A copy handing over may still be exiting — give it a moment (longer when we're the supervised copy it's
+            // waiting to see: it exits as soon as it notices us).
+            let until = Date().addingTimeInterval(Supervisor.isSupervised ? 6 : 1.2)
+            while Supervisor.isDuplicateInstance() && Date() < until { Thread.sleep(forTimeInterval: 0.1) }
             if Supervisor.isDuplicateInstance() { AppLog.write("duplicate instance — exiting"); exit(0) }
         }
         AppLog.write("launch \(Bundle.main.bundlePath) supervised=\(Supervisor.isSupervised)")
@@ -167,6 +169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { @MainActor in self?.handsFree.toggle() }
             },
             // Dictate into any app: hold to talk, or tap to start / tap to finish.
+            // Ask about whatever window you're in: its text is attached and the chat opens with suggestions.
+            HotKey(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(optionKey | shiftKey), id: 6, name: "⌥⇧A") { [weak self] in
+                Task { @MainActor in self?.askAboutScreen() }
+            },
             HotKey(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(optionKey | shiftKey), id: 5, name: "⌥⇧D",
                    release: { [weak self] in Task { @MainActor in self?.dictate.keyUp() } }) { [weak self] in
                 Task { @MainActor in self?.dictate.keyDown() }
@@ -246,6 +252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Scheduled prompts ("every weekday at 9 …"): run when due and the agent is free.
         scheduleTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
+                self?.adoptAppleIfReady(announce: true)       // a new Mac may still be downloading Apple's model
+                self?.refreshToday()
                 guard let self, !self.backend.busy, self.backend.aiConnected else { return }
                 guard let task = ScheduleStore.shared.takeDue().first else {
                     if !self.runDueWatch() { self.backend.core.learnIfIdle() }   // a quiet chat: anything worth remembering?
@@ -259,10 +267,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.notch.showHUD(.awake(on: on, label: HealthLogic.awakeLabel(until: KeepAwake.shared.until)
                 .replacingOccurrences(of: "∞", with: "Until you stop it")), for: 1.8)
         }
-        if ProviderStore.adoptFreeDefault() {                 // free + private out of the box, where possible
-            backend.core.reloadProvider()
-            AppLog.write("no AI set up: using Apple's on-device model")
-        }
+        adoptAppleIfReady(announce: false)                     // free + private out of the box, where possible
+        TodayModel.shared.calendar = hub.calendar
+        Reachout.shared.hub = hub
+        Reachout.shared.backend = backend
+        refreshToday()
         backend.start()
         Updater.shared.start()
         Presence.shared.notch = notch
@@ -413,6 +422,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Today's glance (start-screen strip, meeting ears). The ears change the notch's size, so tell it.
+    private func refreshToday() {
+        let before = TodayModel.shared.earMeeting
+        TodayModel.shared.refresh()
+        if TodayModel.shared.earMeeting != before { withAnimation(Motion.open) { notch.objectWillChange.send() } }
+    }
+
+    /// ⌥⇧A: read the front window (selected text wins — opening the notch attaches it), attach it, open the chat.
+    /// Reading runs off the main thread (rule 13) and never prompts: no Accessibility → a hint instead.
+    private func askAboutScreen() {
+        hub.module = .chat
+        notch.expand(pinned: true, focus: true)
+        ValueLedger.shared.add(.nudgesTaken)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)          // let the selection grab (notch open) land first
+            guard let self, !self.backend.attachments.contains(where: { $0.kind == .selection }) else { return }
+            let r = await MacTools.readFrontWindow()
+            if r.ok {
+                self.backend.attachments.removeAll { $0.kind == .screen }
+                self.backend.attach(Attachment(kind: .screen, value: r.text))
+            } else {
+                self.backend.notice(r.text)
+            }
+        }
+    }
+
+    /// No AI set up yet: use Apple's on-device model the moment it's usable. Checked at launch, every 30 s and
+    /// when the notch opens — on a new Mac the model is often still downloading at first launch. Never replaces
+    /// an AI the user picked (`AppleLogic.shouldAdopt`).
+    private func adoptAppleIfReady(announce: Bool) {
+        guard ProviderStore.activeKind == nil, AppleOnDeviceProvider.status == .ready,
+              ProviderStore.adoptFreeDefault() else { return }
+        backend.core.reloadProvider()
+        AppLog.write("no AI set up: using Apple's on-device model (\(AppleOnDeviceProvider.readyDetail))")
+        if announce {
+            backend.info("Apple's on-device AI is ready — I'm using it now (free, private, works offline). For bigger jobs, connect a smarter model in Settings › AI.")
+        }
+    }
+
     // MARK: Ask about this · writing tools · proactive · quick capture
 
     private func wireAssist() {
@@ -424,7 +472,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Snapshot what you're working on the moment the notch opens.
         notch.onOpen = { [weak ctx, weak self] in
             ctx?.refresh()
+            self?.adoptAppleIfReady(announce: true)
             Decider.prewarm()                                     // the routing model is ready by the time you've typed
+            if ProviderStore.activeKind == .apple { AppleOnDeviceProvider.prewarm() }   // and the chat model
             if self?.backend.unseenAnswer == true {               // opened to see the result
                 self?.backend.unseenAnswer = false
                 self?.hub.module = .chat
@@ -650,7 +700,7 @@ struct OpenNotchMain {
             let args = Array(CommandLine.arguments.dropFirst(i + 1))
             Task { @MainActor in
                 FrontApp.startTracking()
-                let base = ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all()
+                let base = ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all() + CalendarTools.all() + DocSearch.all() + PhotosTools.all()
                 let all = base + [ScriptLogic.tool { base }]
                 guard let name = args.first, let tool = all.first(where: { $0.name == name }), tool.risk == .read else {
                     print("give a read-only tool name"); exit(2)

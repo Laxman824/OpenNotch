@@ -152,12 +152,60 @@ enum AgentChecks {
         // Apple on-device tool schemas
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
-            for name in AppleOnDeviceProvider.onDeviceTools {
+            for name in AppleLogic.tools(contextTokens: 8192) {
                 let t = AppleOnDeviceProvider.registry.first { $0.name == name }
                 check("on-device tool schema: \(name)", t.flatMap(BridgedTool.schema) != nil)
+                check("on-device tool needs no approval: \(name)", t?.risk != .confirm)
             }
         }
         #endif
+        // Apple on-device sizing and the free default.
+        check("apple: 4K keeps 12k chars", AppleLogic.contextChars(tokens: 4096) == 12_000
+              && AppleLogic.contextChars(tokens: 0) == 12_000)
+        check("apple: 8K gets more, capped", AppleLogic.contextChars(tokens: 8192) > 20_000
+              && AppleLogic.contextChars(tokens: 1_000_000) == 60_000)
+        check("apple: small model keeps a short tool list", AppleLogic.tools(contextTokens: 4096).count <= 8
+              && !AppleLogic.tools(contextTokens: 4096).contains("web_search")
+              && AppleLogic.tools(contextTokens: 8192).contains("web_search"))
+        check("apple: onboarding's timer try works on-device", AppleLogic.tools(for: "Set a 5-minute timer", routerGroups: [],
+                                                                                 contextTokens: 4096) == ["timer"])
+        check("apple: never `open` (acts on the Mac)", !AppleLogic.tools(contextTokens: 8192).contains("open"))
+        func appleTools(_ t: String, _ k: Int = 8192) -> [String] {
+            AppleLogic.tools(for: t, routerGroups: ToolRouter.keywordGroups([ChatMessage(role: .user, text: t)]), contextTokens: k)
+        }
+        // must-NOT: small talk, maths and writing get no tools (seen live: web search for "12% of 80", open for a poem).
+        for t in ["hi! who are you?", "what's 12% of 80?", "Write a two-line poem about coffee.", "translate thank you to French",
+                  "what is 17 × 23?", "explain recursion simply"] {
+            check("apple: no tools for \"\(t)\"", appleTools(t).isEmpty)
+        }
+        check("apple: weather", appleTools("What's the weather in Paris right now?").contains("weather"))
+        check("apple: calendar", appleTools("what's on my calendar tomorrow").contains("calendar_events"))
+        check("apple: news searches on 8K only", appleTools("Who won the most recent F1 race?") == ["web_search"]
+              && appleTools("Who won the most recent F1 race?", 4096).isEmpty)
+        check("apple: battery", appleTools("how's my battery") == ["system_info"])
+        func filtered(_ parts: [String]) -> String {
+            var f = AppleLogic.StampFilter()
+            return parts.map { f.feed($0) }.joined() + f.finish()
+        }
+        check("apple: echoed stamp dropped", filtered(["Brewed dawn.\n", "Se", "nt: 06", ":29"]) == "Brewed dawn.\n")
+        check("apple: echoed stamp mid-answer dropped", filtered(["a\nSent: x\nb"]) == "a\nb")
+        check("apple: text untouched (must-NOT)", filtered(["Se", "nd it now.\nSentence two"]) == "Send it now.\nSentence two"
+              && filtered(["S", "o: 391"]) == "So: 391" && filtered(["The email was Sent: yes"]) == "The email was Sent: yes")
+        check("apple: stamp stripped", AppleLogic.cleanPrompt("hello" + AgentCore.contextMarker + "\nSent: Thu 19 Nov 2026, 06:27 (Europe/Berlin, UTC+01:00)") == "hello")
+        check("apple: context kept, stamp dropped", AppleLogic.cleanPrompt("sum this" + AgentCore.contextMarker + "\nPage: Foo\n\nSent: x")
+              == "sum this" + AgentCore.contextMarker + "\nPage: Foo")
+        check("apple: never approval tools", !AppleLogic.tools(contextTokens: 8192).contains { ["run_command", "write_file", "mail_send",
+              "mail_draft", "create_event", "create_reminder", "edit_file"].contains($0) })
+        check("apple: downloading → keep checking", AppleLogic.status(reason: "Apple's on-device model is still downloading — try again in a while.") == .waiting)
+        check("apple: switched off → keep checking", AppleLogic.status(reason: "Turn on Apple Intelligence in System Settings › Apple Intelligence & Siri, then try again.") == .waiting)
+        check("apple: old Mac → stop", AppleLogic.status(reason: "This Mac doesn't support Apple Intelligence.") == .never
+              && AppleLogic.status(reason: "Needs macOS 26 or later.") == .never && AppleLogic.status(reason: nil) == .ready)
+        check("apple: adopt only with no AI", AppleLogic.shouldAdopt(activeKind: nil, status: .ready))
+        check("apple: never replaces a picked AI (must-NOT)", !AppleLogic.shouldAdopt(activeKind: .openrouter, status: .ready)
+              && !AppleLogic.shouldAdopt(activeKind: .ollama, status: .ready) && !AppleLogic.shouldAdopt(activeKind: nil, status: .waiting))
+        check("apple: detail", AppleLogic.detail(variant: "Core Advanced", tokens: 8192) == "Core Advanced · 8K tokens"
+              && AppleLogic.detail(variant: nil, tokens: 4096) == "4K tokens")
+        check("apple: compact prompt even with a bigger window", AppleOnDeviceProvider().compactPrompt)
     }
 
     @MainActor private static func uxPolish() {
@@ -165,6 +213,157 @@ enum AgentChecks {
         check("onboarding: no AI", OnboardingLogic.brain(connected: false, kind: .openrouter) == .none)
         check("onboarding: apple", OnboardingLogic.brain(connected: true, kind: .apple) == .apple)
         check("onboarding: other", OnboardingLogic.brain(connected: true, kind: .groq) == .other(ProviderKind.groq.label))
+        // Reaching out first: conflicts, overdue, downloads, birthdays.
+        let r0 = Date(timeIntervalSince1970: 1_800_000_000)
+        func rev(_ id: String, _ s: Double, _ e: Double) -> ReachoutLogic.Ev {
+            ReachoutLogic.Ev(id: id, title: id, start: r0.addingTimeInterval(s * 60), end: r0.addingTimeInterval(e * 60))
+        }
+        check("reach: overlap found", ReachoutLogic.conflict([rev("a", 0, 60), rev("b", 30, 90)]).map { $0.0.id + $0.1.id } == "ab")
+        check("reach: back-to-back isn't a conflict (must-NOT)", ReachoutLogic.conflict([rev("a", 0, 60), rev("b", 60, 90)]) == nil
+              && ReachoutLogic.conflict([rev("a", 0, 60), rev("b", 55, 90)]) == nil)
+        check("reach: overdue by more than an hour", ReachoutLogic.overdue([r0.addingTimeInterval(-7200), r0.addingTimeInterval(-600), r0.addingTimeInterval(600)], now: r0) == 1)
+        check("reach: downloads worth offering", ReachoutLogic.worthOffering(download: "/Users/x/Downloads/Offer Letter.pdf")
+              && !ReachoutLogic.worthOffering(download: "/Users/x/Downloads/setup.dmg")
+              && !ReachoutLogic.worthOffering(download: "/Users/x/Downloads/report.pdf.crdownload")
+              && !ReachoutLogic.worthOffering(download: "/Users/x/Downloads/.hidden.pdf"))
+        check("reach: download query bounded", ReachoutLogic.downloadQuery(seconds: 5).contains("$time.now(-30)")
+              && ReachoutLogic.downloadQuery(seconds: 99_999).contains("$time.now(-3600)"))
+        check("reach: birthdays today", ReachoutLogic.birthdays([("Sam Lee", 11, 19), ("Ann", 3, 2), ("", 11, 19)], month: 11, day: 19) == ["Sam Lee"])
+        check("reach: calm keeps only conflicts (must-NOT nag)", PresenceLogic.allowed(.conflict, .calm) && !PresenceLogic.allowed(.download, .calm)
+              && !PresenceLogic.allowed(.birthday, .calm) && !PresenceLogic.allowed(.download, .friendly))
+        // Routine gallery: starters are valid, sharing round-trips, random text isn't a routine.
+        check("routines: starter names valid and unique", RoutineGallery.starters.allSatisfy { RoutineLogic.cleanName($0.name) == $0.name }
+              && Set(RoutineGallery.starters.map(\.name)).count == RoutineGallery.starters.count)
+        let shared = RoutineGallery.shareText(name: "focus hour", steps: "Start a 50-minute timer.\nKeep the Mac awake.")
+        check("routines: share round-trips", RoutineGallery.parse("Try this one!\n" + shared)?.name == "focus hour"
+              && RoutineGallery.parse(shared)?.steps == "Start a 50-minute timer.\nKeep the Mac awake.")
+        check("routines: not a routine (must-NOT)", RoutineGallery.parse("start work\nopen slack") == nil
+              && RoutineGallery.parse(RoutineGallery.header + "x\n") == nil
+              && RoutineGallery.parse(RoutineGallery.header + "big\n" + String(repeating: "a", count: 2001)) == nil)
+        // Photos search + images in document search.
+        check("photos: query cleaned (must-NOT inject AppleScript)", PhotosLogic.query("dog\" & do shell script \"x") == "dog & do shell script x"
+              && PhotosLogic.query("   ") == nil)
+        check("photos: rows", PhotosLogic.rows("ABC/L0/001\tIMG_1.HEIC\t2026-08-01T10:00:00\tmissing value\tbeach, dog")
+              == ["- IMG_1.HEIC · 2026-08-01T10:00:00 · tags: beach, dog [id ABC/L0/001]"])
+        check("router: photos group", ToolRouter.keywordGroups([ChatMessage(role: .user, text: "find photos of my dog at the beach")]).contains("photos")
+              && !ToolRouter.keywordGroups([ChatMessage(role: .user, text: "what's the weather")]).contains("photos"))
+        check("docs: images searched by their text", DocSearchLogic.spotlightQuery(["receipt"], any: false)?.contains("public.image") == true
+              && DocSearchLogic.isImage("/x/Screenshot 2026.PNG") && !DocSearchLogic.isImage("/x/a.pdf"))
+        // Supervisor handover (issue #1): never leave unless launchd really took over.
+        check("supervisor: leave only when the job runs", SupervisorLogic.shouldExit(bootstrapStatus: 0, supervisedCopySeen: true))
+        check("supervisor: refused → stay (must-NOT exit)", !SupervisorLogic.shouldExit(bootstrapStatus: 5, supervisedCopySeen: false)
+              && !SupervisorLogic.shouldExit(bootstrapStatus: 5, supervisedCopySeen: true))
+        check("supervisor: loaded but never started → stay (must-NOT exit)", !SupervisorLogic.shouldExit(bootstrapStatus: 0, supervisedCopySeen: false))
+        // Document search: words, a safe query, cited passages.
+        check("docs: terms drop filler", DocSearchLogic.terms("When does my lease renew?") == ["lease", "renew"])
+        check("docs: numbers kept, ≤ 6 terms", DocSearchLogic.terms("invoice 42 for acme project alpha beta gamma delta").count == 6
+              && DocSearchLogic.terms("invoice 42").contains("42"))
+        check("docs: query sanitised (must-NOT inject)", DocSearchLogic.spotlightQuery(["lease\" || kMDItemFSName == \"*"], any: false)?
+              .hasPrefix("(kMDItemTextContent == \"leasekMDItemFSName\"cdw) && (") == true)
+        check("docs: all vs any", DocSearchLogic.spotlightQuery(["lease", "renew"], any: false)?.contains("&& kMDItemTextContent") == true
+              && DocSearchLogic.spotlightQuery(["lease", "renew"], any: true)?.contains("|| kMDItemTextContent") == true)
+        let leasePages = ["Tenant: A. Person. Rent is due monthly on the 1st of each month to the landlord.",
+                          "Term and renewal.\n\nThis lease renews automatically on 1 March 2027 unless either party gives 60 days notice.\n\nPets are allowed."]
+        let lp = DocSearchLogic.passages(pages: leasePages, terms: ["lease", "renew"], paged: true)
+        check("docs: best passage first, with its page", lp.first?.page == 2 && lp.first?.text.contains("1 March 2027") == true)
+        check("docs: cite file and page", DocSearchLogic.format(file: "/x/Lease 2026.pdf", passages: Array(lp.prefix(1)))
+              .hasPrefix("Lease 2026.pdf, page 2: “This lease renews"))
+        check("docs: nothing matching → no passages", DocSearchLogic.passages(pages: ["Hello there, nothing here at all."], terms: ["lease"], paged: false).isEmpty)
+        check("docs: results are fenced and parallel-safe", TurnPolicy.isExternal("search_documents") && TurnPolicy.parallelSafe.contains("search_documents"))
+        check("router: 'my lease' loads document search", ToolRouter.keywordGroups([ChatMessage(role: .user, text: "when does my lease renew?")]).contains("find"))
+        // Today: meeting ears and the start-screen strip.
+        let tNow = Date(timeIntervalSince1970: 1_800_000_000)
+        func ev(_ title: String, _ startMin: Double, _ lenMin: Double = 30, link: String? = nil) -> UpcomingEvent {
+            UpcomingEvent(title: title, start: tNow.addingTimeInterval(startMin * 60), end: tNow.addingTimeInterval((startMin + lenMin) * 60),
+                          link: link, calendar: "Work")
+        }
+        check("today: ears count down in the last 15 min", TodayLogic.earMeeting([ev("Standup", 12)], now: tNow)?.title == "Standup")
+        check("today: not earlier (must-NOT)", TodayLogic.earMeeting([ev("Later", 20)], now: tNow) == nil)
+        check("today: 'now' for 5 min after the start, then gone", TodayLogic.earMeeting([ev("Sync", -4)], now: tNow) != nil
+              && TodayLogic.earMeeting([ev("Sync", -6)], now: tNow) == nil)
+        check("today: countdown", TodayLogic.countdown(to: tNow.addingTimeInterval(11.5 * 60), now: tNow) == "12m"
+              && TodayLogic.countdown(to: tNow.addingTimeInterval(10), now: tNow) == "now"
+              && TodayLogic.countdown(to: tNow.addingTimeInterval(65 * 60), now: tNow) == "1h 5m"
+              && TodayLogic.countdown(to: tNow.addingTimeInterval(120 * 60), now: tNow) == "2h")
+        check("today: next = in-progress call, else next to start", TodayLogic.next([ev("Call", -10, link: "https://meet.google.com/a"), ev("Lunch", 60)], now: tNow)?.title == "Call"
+              && TodayLogic.next([ev("Focus", -10), ev("Lunch", 60)], now: tNow)?.title == "Lunch")
+        check("today: rest line", TodayLogic.restLine(eventsLeft: 2, remindersDue: 1) == "2 more events today · 1 reminder due"
+              && TodayLogic.restLine(eventsLeft: 0, remindersDue: 0) == "Nothing else today")
+        // Calendars: every account, the right calendar, invites through the account's own page.
+        let cals: [CalendarLogic.Cal] = [.init(title: "Home", account: "iCloud", writable: true),
+                                         .init(title: "Work", account: "iCloud", writable: true),
+                                         .init(title: "me@gmail.com", account: "me@gmail.com", writable: true, isGoogle: true),
+                                         .init(title: "Team", account: "me@gmail.com", writable: true, isGoogle: true),
+                                         .init(title: "Holidays", account: "me@gmail.com", writable: false, isGoogle: true),
+                                         .init(title: "Work", account: "boss@corp.com", writable: true, isGoogle: true)]
+        check("cal: title (account)", CalendarLogic.pick(cals, query: "Work (boss@corp.com)")?.account == "boss@corp.com")
+        check("cal: unique title", CalendarLogic.pick(cals, query: "team")?.title == "Team")
+        check("cal: account → its main calendar", CalendarLogic.pick(cals, query: "me@gmail.com")?.title == "me@gmail.com")
+        check("cal: ambiguous title → ask (must-NOT guess)", CalendarLogic.pick(cals, query: "Work") == nil)
+        check("cal: read-only never picked (must-NOT)", CalendarLogic.pick(cals, query: "Holidays") == nil)
+        check("cal: listing groups accounts", CalendarLogic.listing(cals).contains("me@gmail.com [Google]: me@gmail.com, Team, Holidays (read-only)"))
+        check("cal: no Google → says how to add", CalendarLogic.listing([cals[0]]).contains("Internet Accounts"))
+        check("cal: join links", CalendarLogic.joinLink([nil, "Room 4", "Join: https://meet.google.com/abc-defg-hij thanks"]) == "https://meet.google.com/abc-defg-hij"
+              && CalendarLogic.joinLink(["https://us02web.zoom.us/j/123?pwd=x"]) == "https://us02web.zoom.us/j/123?pwd=x"
+              && CalendarLogic.joinLink(["see https://example.com/meet"]) == nil)
+        let gs = CalendarLogic.guests("a@x.com, B@y.org; a@x.com bob")
+        check("cal: guests deduped, non-emails flagged", gs.ok == ["a@x.com", "B@y.org"] && gs.bad == ["bob"])
+        let gStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let gURL = CalendarLogic.googleURL(title: "Sync", start: gStart, end: gStart.addingTimeInterval(1800), details: "Agenda",
+                                           location: nil, guests: ["a@x.com", "b@y.org"], account: "boss@corp.com",
+                                           zone: TimeZone(identifier: "Europe/Berlin")!)
+        let gq = Dictionary(uniqueKeysWithValues: (URLComponents(url: gURL!, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        check("cal: google invite page", gq["action"] == "TEMPLATE" && gq["add"] == "a@x.com,b@y.org" && gq["authuser"] == "boss@corp.com"
+              && gq["dates"] == "20270115T080000Z/20270115T083000Z" && gq["ctz"] == "Europe/Berlin" && gq["details"] == "Agenda")
+        check("cal: service from account", CalendarLogic.service(asked: nil, account: "x@outlook.com") == "outlook_personal"
+              && CalendarLogic.service(asked: nil, account: "me@gmail.com") == "google" && CalendarLogic.service(asked: "outlook", account: nil) == "outlook")
+        check("cal: invite tool sends nothing itself", CalendarTools.invite.risk == .read
+              && CalendarTools.invite.description.contains("Nothing is sent before that"))
+        check("router: invites load calendar tools", ToolRouter.keywordGroups([ChatMessage(role: .user, text: "invite priya and sam to a sync on friday")]).contains("calendar"))
+        // Mail: send from the right account, never guess.
+        let addrs = MailLogic.addresses("me@gmail.com, boss@corp.com, me@icloud.com")
+        check("mail: addresses parsed", addrs == ["me@gmail.com", "boss@corp.com", "me@icloud.com"])
+        check("mail: sender exact / unique part", MailLogic.pickSender("BOSS@corp.com", addresses: addrs) == "boss@corp.com"
+              && MailLogic.pickSender("corp", addresses: addrs) == "boss@corp.com")
+        check("mail: ambiguous sender → nil (must-NOT guess)", MailLogic.pickSender("me", addresses: addrs) == nil
+              && MailLogic.pickSender("yahoo", addresses: addrs) == nil)
+        // Meeting notes → follow-up chips.
+        let notesFull = "**Summary** — We agreed the launch moves to May.\n**Decisions** — Launch in May.\n**Action items** —\n- Me — send the deck — Friday\n- Priya — book venue — ?\n**Open questions** — None. Next meeting on Tuesday."
+        check("notes: chips", MeetingLogic.followUps(notes: notesFull) == ["Draft a follow-up email", "Remind me of my action items",
+                                                                            "Put the next meeting on my calendar"])
+        check("notes: no 'remind me' when nothing is mine", !MeetingLogic.followUps(notes: "**Summary** — x\n**Action items** —\n- Priya — book venue — ?")
+              .contains("Remind me of my action items"))
+        check("notes: nothing to work from → no chips (must-NOT)", MeetingLogic.followUps(notes: "I couldn't summarise this one.").isEmpty)
+        check("notes: Apple gets a transcript that fits", MeetingLogic.clipLimit(contextChars: 24_288) == 20_288
+              && MeetingLogic.clipLimit(contextChars: 12_000) == 8_000 && MeetingLogic.clipLimit(contextChars: 300_000) == 60_000)
+        // Feedback card: a week in, 3 active days, rarely, never after 3 asks; the link holds only the typed note.
+        let day: TimeInterval = 86_400
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        func ask(_ since: Double?, days: Int = 5, asked: Double? = nil, count: Int = 0, answered: Double? = nil) -> Bool {
+            FeedbackLogic.shouldAsk(now: t0, since: since.map { t0.addingTimeInterval(-$0 * day) }, activeDays: days,
+                                    lastAsked: asked.map { t0.addingTimeInterval(-$0 * day) }, askCount: count,
+                                    answered: answered.map { t0.addingTimeInterval(-$0 * day) })
+        }
+        check("feedback: a week in, used 3+ days → ask", ask(8))
+        check("feedback: not in the first week (must-NOT)", !ask(6) && !ask(nil))
+        check("feedback: not for light use (must-NOT)", !ask(30, days: 2))
+        check("feedback: not again within 3 weeks (must-NOT)", !ask(30, asked: 10) && ask(30, asked: 22, count: 1))
+        check("feedback: never after 3 asks (must-NOT)", !ask(300, asked: 100, count: 3))
+        check("feedback: quiet for 4 months after an answer (must-NOT)", !ask(300, answered: 60) && ask(300, answered: 130))
+        check("feedback: days unique, newest last, ≤ 30", FeedbackLogic.addDay("d2", to: ["d1", "d2"]) == ["d1", "d2"]
+              && FeedbackLogic.addDay("d3", to: ["d1"]) == ["d1", "d3"]
+              && FeedbackLogic.addDay("x", to: (0..<30).map { "d\($0)" }).count == 30)
+        let fbURL = FeedbackLogic.issueURL(good: false, note: "Timer didn't start\nwhen I asked", info: "OpenNotch 0.1.5 · macOS 27.2 · AI: apple")
+        let fbItems = URLComponents(url: fbURL!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        check("feedback: issue link", fbURL?.absoluteString.hasPrefix(FeedbackLogic.repo + "/issues/new?") == true
+              && fbItems.first { $0.name == "title" }?.value == "👎 Feedback: Timer didn't start"
+              && fbItems.first { $0.name == "body" }?.value == "Timer didn't start\nwhen I asked\n\n---\nOpenNotch 0.1.5 · macOS 27.2 · AI: apple")
+        check("feedback: no info line unless ticked", FeedbackLogic.body(good: true, note: "hi", info: nil) == "hi")
+        check("feedback: long notes capped", FeedbackLogic.body(good: true, note: String(repeating: "a", count: 9000), info: nil).count == 4000)
+        check("onboarding: apple downloading", OnboardingLogic.brain(connected: false, kind: nil, apple: .waiting) == .appleSoon)
+        check("onboarding: no Apple model → plain none", OnboardingLogic.brain(connected: false, kind: nil, apple: .never) == .none)
+        check("onboarding: a picked AI wins over a downloading Apple", OnboardingLogic.brain(connected: true, kind: .groq, apple: .waiting)
+              == .other(ProviderKind.groq.label))
         // Onboarding landing curves and stage spots.
         check("landing: falls from top to ground", OnboardingLogic.fall(0) == 0 && OnboardingLogic.fall(OnboardingLogic.fallTime) == 1
               && OnboardingLogic.fall(OnboardingLogic.fallTime / 2) < 0.5)

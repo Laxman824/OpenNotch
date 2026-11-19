@@ -62,6 +62,22 @@ enum DailyTools {
             + "for it; or (2) connect an email connector (MCP server, e.g. for Gmail) in OpenNotch Settings › AI › Connectors."
     }
 
+    /// Every address of every Mail account ("a@x.com, b@y.com" from osascript).
+    static func mailAddresses() -> [String] {
+        let r = script("tell application \"Mail\" to return email addresses of every account", timeout: 20)
+        guard r.ok else { return [] }
+        return MailLogic.addresses(r.out)
+    }
+
+    /// `from` → the exact address to send from, or why not. nil `from` → (nil, nil): Mail's default.
+    static func resolveSender(_ from: String?) -> (address: String?, problem: String?) {
+        guard let from, !from.trimmingCharacters(in: .whitespaces).isEmpty else { return (nil, nil) }
+        let all = mailAddresses()
+        if let a = MailLogic.pickSender(from, addresses: all) { return (a, nil) }
+        return (nil, "No Mail account sends from “\(from)”. Accounts: " + (all.isEmpty ? "none found" : all.joined(separator: ", "))
+                + ". Ask which one to use, or add the account in System Settings › Internet Accounts.")
+    }
+
     static func script(_ src: String, timeout: TimeInterval = 25) -> (ok: Bool, out: String) {
         let r = Proc.run("/usr/bin/osascript", ["-e", src], timeout: timeout)
         return (r.status == 0 && !r.timedOut, r.status == 0 ? r.out : (r.timedOut ? "timed out" : r.err))
@@ -155,10 +171,11 @@ enum DailyTools {
             name: "mail_draft",
             description: "Open a new email draft in Mail.app for the user to review (and edit) before it's sent. Use mail_send to send.",
             schema: Schema.object(["to": Schema.string("Recipient email address(es), comma-separated"),
-                                   "subject": Schema.string("Subject"), "body": Schema.string("Plain-text body")],
+                                   "subject": Schema.string("Subject"), "body": Schema.string("Plain-text body"),
+                                   "from": Schema.string("Which of the user's accounts to send from (an address; optional — Mail's default otherwise)")],
                                   required: ["to", "subject", "body"]),
             risk: .confirm, verb: "Drafting an email", detail: { $0.str("to") ?? "" },
-            preview: { a in "To: \(a.str("to") ?? "")\nSubject: \(a.str("subject") ?? "")\n\n" + String((a.str("body") ?? "").prefix(500)) },
+            preview: { a in (a.str("from").map { "From: \($0)\n" } ?? "") + "To: \(a.str("to") ?? "")\nSubject: \(a.str("subject") ?? "")\n\n" + String((a.str("body") ?? "").prefix(500)) },
             run: { a in
                 guard let to = a.str("to"), let subject = a.str("subject") else { return .fail("to and subject are required") }
                 if let p = mailBackgroundSkip() { return .fail(p) }
@@ -167,16 +184,19 @@ enum DailyTools {
                 let recipients = to.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
                 let adds = recipients.map { "make new to recipient at end of to recipients with properties {address:\"\(esc($0))\"}" }
                     .joined(separator: "\n    ")
+                let sender = resolveSender(a.str("from"))
+                if let p = sender.problem { return .fail(p) }
+                let senderProp = sender.address.map { ", sender:\"\(esc($0))\"" } ?? ""
                 let r = script("""
                 tell application "Mail"
-                  set msg to make new outgoing message with properties {subject:"\(esc(subject))", content:"\(esc(a.str("body") ?? ""))", visible:true}
+                  set msg to make new outgoing message with properties {subject:"\(esc(subject))", content:"\(esc(a.str("body") ?? ""))", visible:true\(senderProp)}
                   tell msg
                     \(adds)
                   end tell
                   activate
                 end tell
                 """)
-                return r.ok ? ToolOutcome(ok: true, text: "Draft opened in Mail — not sent yet. The user can edit it there; "
+                return r.ok ? ToolOutcome(ok: true, text: "Draft opened in Mail" + (sender.address.map { " from \($0)" } ?? "") + " — not sent yet. The user can edit it there; "
                                           + "send it with mail_send (same subject) when they say so, or they press Send (⇧⌘D).")
                     : .fail("Couldn't create the draft: \(r.out)")
             }),
@@ -186,10 +206,11 @@ enum DailyTools {
                 + "If a draft with this subject is open in Mail (from mail_draft), that draft is sent as it is now — "
                 + "including any edits the user made there. Only call this when the user asked to send.",
             schema: Schema.object(["to": Schema.string("Recipient email address(es), comma-separated"),
-                                   "subject": Schema.string("Subject"), "body": Schema.string("Plain-text body")],
+                                   "subject": Schema.string("Subject"), "body": Schema.string("Plain-text body"),
+                                   "from": Schema.string("Which of the user's accounts to send from (an address; optional — Mail's default otherwise)")],
                                   required: ["to", "subject", "body"]),
             risk: .confirm, verb: "Sending an email", detail: { $0.str("to") ?? "" },
-            preview: { a in "SEND to: \(a.str("to") ?? "")\nSubject: \(a.str("subject") ?? "")\n\n" + String((a.str("body") ?? "").prefix(800))
+            preview: { a in "SEND to: \(a.str("to") ?? "")" + (a.str("from").map { " · from \($0)" } ?? "") + "\nSubject: \(a.str("subject") ?? "")\n\n" + String((a.str("body") ?? "").prefix(800))
                 + "\n\n(If this draft is open in Mail, it's sent as it is there, with your edits.)" },
             run: { a in
                 guard let to = a.str("to"), let subject = a.str("subject") else { return .fail("to and subject are required") }
@@ -202,6 +223,9 @@ enum DailyTools {
                 }
                 let adds = recipients.map { "make new to recipient at end of to recipients with properties {address:\"\(esc($0))\"}" }
                     .joined(separator: "\n      ")
+                let sender = resolveSender(a.str("from"))
+                if let p = sender.problem { return .fail(p) }
+                let senderProp = sender.address.map { ", sender:\"\(esc($0))\"" } ?? ""
                 // Prefer the open draft (keeps the user's edits); else compose and send.
                 let r = script("""
                 tell application "Mail"
@@ -210,7 +234,7 @@ enum DailyTools {
                     set msg to item 1 of openDrafts
                     set how to "draft"
                   else
-                    set msg to make new outgoing message with properties {subject:"\(esc(subject))", content:"\(esc(a.str("body") ?? ""))", visible:false}
+                    set msg to make new outgoing message with properties {subject:"\(esc(subject))", content:"\(esc(a.str("body") ?? ""))", visible:false\(senderProp)}
                     tell msg
                       \(adds)
                     end tell
@@ -547,5 +571,23 @@ final class ScheduleStore: @unchecked Sendable {
 
     private func save() {
         if let d = try? JSONEncoder().encode(tasks) { try? d.write(to: URL(fileURLWithPath: path), options: .atomic) }
+    }
+}
+
+/// Pure mail rules (checked in AgentChecks).
+enum MailLogic {
+    /// osascript's "a@x.com, b@y.com" (nested account lists flatten the same way) → addresses.
+    static func addresses(_ out: String) -> [String] {
+        out.split(whereSeparator: { ", {}\n\"".contains($0) }).map(String.init).filter { $0.contains("@") }
+    }
+
+    /// The sending address `from` means: an exact address (any case), else the one address containing it
+    /// ("work", "gmail"). Ambiguous or unknown → nil (never guess a sender).
+    static func pickSender(_ from: String, addresses: [String]) -> String? {
+        let q = from.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return nil }
+        if let exact = addresses.first(where: { $0.lowercased() == q }) { return exact }
+        let partial = addresses.filter { $0.lowercased().contains(q) }
+        return partial.count == 1 ? partial[0] : nil
     }
 }

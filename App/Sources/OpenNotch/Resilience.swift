@@ -33,6 +33,11 @@ enum AppLog {
 ///  * **crash capture**: on launch, any new macOS crash report for OpenNotch
 ///    is copied to ~/Library/Application Support/OpenNotch/crashes/, summarised into the log, and
 ///    surfaced once, so nothing fails silently.
+/// Pure rule (checked): leave only when launchd took the job *and* its copy is running.
+enum SupervisorLogic {
+    static func shouldExit(bootstrapStatus: Int32, supervisedCopySeen: Bool) -> Bool { bootstrapStatus == 0 && supervisedCopySeen }
+}
+
 enum Supervisor {
     static let label = "dev.opennotch.app"
     static var plistPath: String { "\(NSHomeDirectory())/Library/LaunchAgents/\(label).plist" }
@@ -81,20 +86,43 @@ enum Supervisor {
         return true
     }
 
-    /// Opened from Finder / `open` / the build script: hand over to the
-    /// launchd job so crashes get restarted. A detached shell (re)loads the
-    /// job just after this process exits, so the two never overlap.
-    static func handOverAndExit() -> Never {
+    /// Opened from Finder / `open` / the build script: hand over to the launchd job so crashes get restarted.
+    /// Exits only once the supervised copy is seen running. If macOS refuses or silently drops the job (seen on
+    /// macOS 27 with a self-signed build — issue #1: the app quit 0.4 s after launch and never came back), the job
+    /// is removed and this copy keeps running unsupervised; the handover isn't tried again for this version.
+    /// Returns only when the handover failed.
+    static func handOverOrStay(beforeExit: () -> Void = {}) {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        guard UserDefaults.standard.string(forKey: failedKey) != version else {
+            AppLog.write("supervisor: skipped (handover failed before on \(version)) — running unsupervised")
+            return
+        }
         AppLog.write("handing over to launchd supervisor")
-        let d = domain, l = label, p = plistPath
-        let sh = Process()
-        sh.executableURL = URL(fileURLWithPath: "/bin/sh")
-        sh.arguments = ["-c", "sleep 0.7; launchctl bootout \(d)/\(l) 2>/dev/null; launchctl bootstrap \(d) '\(p)'"]
-        sh.standardOutput = FileHandle.nullDevice
-        sh.standardError = FileHandle.nullDevice
-        try? sh.run()
-        exit(0)
+        launchctl(["bootout", "\(domain)/\(label)"])
+        let status = launchctl(["bootstrap", domain, plistPath])
+        let me = ProcessInfo.processInfo.processIdentifier
+        var started = false
+        if status == 0 {
+            let until = Date().addingTimeInterval(4)
+            while Date() < until {
+                let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+                    .filter { $0.processIdentifier != me && !$0.isTerminated }
+                if !others.isEmpty { started = true; break }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        }
+        if SupervisorLogic.shouldExit(bootstrapStatus: status, supervisedCopySeen: started) {
+            AppLog.write("supervisor: handed over")
+            beforeExit()
+            exit(0)                                        // the supervised copy waits 1.2 s for us to go
+        }
+        AppLog.write("supervisor: handover failed (bootstrap \(status), started \(started)) — running unsupervised")
+        launchctl(["bootout", "\(domain)/\(label)"])
+        try? FileManager.default.removeItem(atPath: plistPath)
+        UserDefaults.standard.set(version, forKey: failedKey)
     }
+
+    static let failedKey = "supervisor.failedVersion"
 
     static func uninstall() {
         launchctl(["bootout", "\(domain)/\(label)"])

@@ -25,7 +25,7 @@ enum DecisionLogic {
     static let blurbs: [String: String] = [
         "files": "change, create or edit files and code, or search inside files",
         "mail": "read, check, draft, reply to or send email",
-        "calendar": "calendar events, meetings, the day's plan, reminders and to-dos",
+        "calendar": "calendar events, meetings, invites, the day's plan, reminders and to-dos",
         "notes_app": "Apple Notes: find, read or create a note",
         "contacts": "look up a person's phone number, email address or birthday",
         "weather": "weather, rain, temperature or the forecast",
@@ -37,7 +37,8 @@ enum DecisionLogic {
         "screen": "the text of what's on screen or in the window the user is looking at (this email, this document)",
         "routines": "save, run or export a named routine, or turn something into an Apple Shortcut or Siri command",
         "watch": "keep checking something in the background and tell the user when it happens (\"let me know when …\")",
-        "find": "find a document, PDF, photo or file on the Mac by content, kind, person or date",
+        "find": "find a document, PDF or file on the Mac, or answer a question from the user's own documents",
+        "photos": "search the Photos library: pictures of things, places, people or dates",
     ]
 
     static func blurb(_ g: ToolRouter.Group) -> String {

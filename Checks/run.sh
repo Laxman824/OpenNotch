@@ -22,4 +22,5 @@ swift $T/health.swift
 swift $T/media.swift
 rm -rf "$T"
 # Agent logic (context window, tools, safety net, providers' wire format): built into the app.
+source ../scripts/sdk.sh
 ( cd ../App && swift build >/dev/null && .build/debug/OpenNotch --checks )

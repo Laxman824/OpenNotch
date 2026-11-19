@@ -33,12 +33,16 @@ enum Liveliness: String, CaseIterable, Identifiable {
 }
 
 struct Nudge: Identifiable, Equatable {
-    enum Kind: String, CaseIterable { case clipLink, clipError, clipCode, clipLong, stretch, welcomeBack, morning, callNotes }
+    enum Kind: String, CaseIterable { case clipLink, clipError, clipCode, clipLong, stretch, welcomeBack, morning, callNotes, feedback,
+             conflict, overdue, download, birthday, inboxOffer }
     enum Action: Equatable {
         case ask(String, clip: String?)       // send to Ledge, optionally with the clipboard attached
         case startBreak(minutes: Int)
         case openChat
         case startNotes(String)                // the call app
+        case feedback                          // 👍 / 👎 buttons instead of one action
+        case askFile(String, path: String)     // send to the assistant with a file attached
+        case enableInbox                       // turn on the inbox check
     }
     var id = UUID()
     let kind: Kind
@@ -109,10 +113,11 @@ enum PresenceLogic {
     /// Kinds that only lively/friendly levels offer (calm keeps to the essentials).
     static func allowed(_ k: Nudge.Kind, _ l: Liveliness) -> Bool {
         if k == .callNotes { return true }      // you asked for this kind of help by joining a call; one offer
+        if k == .feedback { return true }       // at most 3 times ever (FeedbackLogic)
         switch l {
         case .lively: return true
-        case .friendly: return k != .clipLong && k != .clipCode
-        case .calm: return k == .welcomeBack
+        case .friendly: return k != .clipLong && k != .clipCode && k != .download
+        case .calm: return k == .welcomeBack || k == .conflict
         }
     }
     static func quietHours(_ hour: Int) -> Bool { hour >= 22 || hour < 7 }
@@ -130,6 +135,10 @@ enum PresenceLogic {
         switch k {
         case .clipLink, .clipError, .clipCode, .clipLong: return 10 * 60
         case .welcomeBack, .morning: return 30 * 60
+        case .feedback: return 2 * 3600
+        case .conflict, .overdue: return 60 * 60
+        case .download: return 10 * 60
+        case .birthday, .inboxOffer: return 4 * 3600
         case .stretch, .callNotes: return 0           // busy = not the moment / only useful right now
         default: return 20 * 60
         }
@@ -241,6 +250,11 @@ final class Presence: ObservableObject {
             return
         }
         if i > 5 * 60 { activeSince = now }                                     // a real pause resets the clock
+        if i < 60 {
+            Feedback.noteActive(now: now)
+            if Feedback.due, offer(Feedback.nudge) { Feedback.markShown() }
+            Reachout.shared.tick(now: now)
+        }
         if let since = awaySince, i < 20 {
             awaySince = nil
             activeSince = now
@@ -362,7 +376,27 @@ final class Presence: ObservableObject {
         case .startNotes(let app):
             notch.collapse()
             MeetingNotes.shared.start(app: app)
+        case .feedback:
+            answerFeedback(good: nil)
+        case let .askFile(prompt, path):
+            hub.module = .chat
+            notch.expand(pinned: true)
+            backend.attach(Attachment(kind: .file, value: path))
+            backend.send(prompt)
+        case .enableInbox:
+            hub.proactive.inboxOn = true
+            notch.collapse()
+            backend.info("I'll keep an eye on your inbox and tell you when a real person writes. Turn it off in the ⋯ menu › Proactive.")
         }
+    }
+
+    /// A thumb on the "How's it going?" card.
+    func answerFeedback(good: Bool?) {
+        if let n = showing, n.kind == .feedback { record(.feedback, "a") }
+        showing = nil
+        Feedback.markAnswered()
+        notch?.collapse()
+        FeedbackWindow.shared.show(good: good)
     }
 
     func dismiss(_ n: Nudge) {
@@ -416,8 +450,21 @@ struct NudgeView: View {
                 }
             }
             Spacer(minLength: 6)
-            PillButton(label: nudge.actionLabel, primary: true) { Presence.shared.act(nudge) }
-                .environment(\.moduleAccent, Module.chat.accent)
+            if nudge.action == .feedback {
+                ForEach([true, false], id: \.self) { up in
+                    Button { Presence.shared.answerFeedback(good: up) } label: {
+                        Text(up ? "👍" : "👎").font(.system(size: 17))
+                            .frame(width: 36, height: 28)
+                            .background(Capsule().fill(.white.opacity(0.08)))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(HoverLift())
+                    .help(up ? "It's going well" : "Something isn't right")
+                }
+            } else {
+                PillButton(label: nudge.actionLabel, primary: true) { Presence.shared.act(nudge) }
+                    .environment(\.moduleAccent, Module.chat.accent)
+            }
             Button { Presence.shared.dismiss(nudge) } label: {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.tertiary)
                     .frame(width: 20, height: 20).contentShape(Circle())

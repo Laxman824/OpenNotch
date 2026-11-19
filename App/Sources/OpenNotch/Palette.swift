@@ -28,6 +28,19 @@ enum PaletteLogic {
 
     /// What to offer after something lands in the composer. `items` are
     /// (kind, value) with kind file | screenshot | clipboard | selection | web.
+    /// ⌥⇧A: what to offer for the window you were in ("Mail — “Subject” (read via …):\n…").
+    static func screenAsks(_ value: String) -> [String] {
+        let app = (value.components(separatedBy: " — ").first ?? value.components(separatedBy: "\n").first ?? "").lowercased()
+        let messaging = ["mail", "outlook", "gmail", "slack", "messages", "whatsapp", "telegram", "discord", "microsoft teams", "spark"]
+        if messaging.contains(where: { app.hasPrefix($0) }) || value.lowercased().contains("gmail") {
+            return ["Draft a reply", "Summarise this", "Make reminders from it", "What do they want from me?"]
+        }
+        if ["xcode", "terminal", "iterm", "visual studio code", "code", "cursor", "zed"].contains(where: { app.hasPrefix($0) }) {
+            return ["Explain this", "What's wrong here?", "Summarise this"]
+        }
+        return ["Explain this", "Summarise this", "Make reminders from it", "Translate to English"]
+    }
+
     static func suggestions(for items: [(kind: String, value: String)]) -> [String] {
         guard let first = items.first else { return [] }
         let files = items.filter { $0.kind == "file" }
@@ -36,6 +49,7 @@ enum PaletteLogic {
         case "screenshot": return ["Explain what's on screen", "What's wrong here?", "Extract the text"]
         case "web": return ["Summarise this page", "Key takeaways", "Is this legit?"]
         case "clipboard", "selection": return ["Summarise this", "Improve the writing", "Explain it simply"]
+        case "screen": return screenAsks(first.value)
         default: break
         }
         let ext = (first.value as NSString).pathExtension.lowercased()
@@ -233,6 +247,7 @@ struct AttachmentSuggestions: View {
             case .clipboard: k = "clipboard"
             case .selection: k = "selection"
             case .web: k = "web"
+            case .screen: k = "screen"
             }
             return (k, a.value)
         }

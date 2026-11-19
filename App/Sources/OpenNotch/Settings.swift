@@ -625,6 +625,8 @@ private struct ShortcutsPane: View {
     private let items: [(String, String)] = [
         ("⌥Space", "Open or close the notch"),
         ("⌥⇧Space", "Hands-free on / off"),
+        ("⌥⇧A", "Ask about the window you're in (email, page, document…)"),
+        ("⌥⇧D", "Dictate into any app (hold, or tap twice)"),
         ("⌘K", "Command palette (in the notch)"),
         ("⌘N", "New chat"),
         ("⌘.", "Stop the running task"),
@@ -679,7 +681,7 @@ final class AIModel: ObservableObject {
             Task {
                 do {
                     let m = try await ProviderStore.test(k, key: nil)
-                    local[k] = k == .apple ? "Ready" : "\(m.count) model\(m.count == 1 ? "" : "s")"
+                    local[k] = k == .apple ? AppleOnDeviceProvider.readyDetail : "\(m.count) model\(m.count == 1 ? "" : "s")"
                 } catch {
                     local[k] = k == .apple ? error.localizedDescription : "Not running"
                 }
@@ -847,17 +849,23 @@ private struct DeciderSection: View {
     }
 }
 
-/// Settings › AI › Routines: saved jobs you start by saying their name — run, add to Apple Shortcuts, delete.
+/// Settings › AI › Routines: saved jobs you start by saying their name — run, share, add to Apple Shortcuts, delete;
+/// starter routines one tap away; import a routine someone shared (always shown before it's saved).
 private struct RoutinesSection: View {
     @State private var items = RoutineStore.shared.all()
     @State private var message: String?
     @State private var confirmDelete: String?
+    @State private var pending: (name: String, steps: String)?
+
+    private var starters: [RoutineGallery.Starter] {
+        RoutineGallery.starters.filter { s in !items.contains { $0.name.lowercased() == s.name.lowercased() } }
+    }
 
     var body: some View {
         Section(title: "Routines") {
             if items.isEmpty {
                 Text("Tell \(Prefs.name) something like “every time I say start work, open Linear and Slack, turn on Focus and brief me "
-                     + "on my day”. Then just say “start work”.")
+                     + "on my day”. Then just say “start work”. Or add a starter below.")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
             }
             ForEach(items) { r in
@@ -868,6 +876,8 @@ private struct RoutinesSection: View {
                     }
                     Spacer()
                     Button("Run") { runNow(r) }
+                    Button { copyShare(r) } label: { Image(systemName: "square.and.arrow.up") }
+                        .help("Copy to share — anyone with OpenNotch can paste it into Import")
                     Button { Task { @MainActor in
                         let out = await ShortcutExport.export(r)
                         message = out.text
@@ -881,9 +891,61 @@ private struct RoutinesSection: View {
                 }
                 .controlSize(.small)
             }
+            if let p = pending {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Import “\(p.name)”?").font(.system(size: 12.5, weight: .semibold))
+                    Text(p.steps).font(.system(size: 11)).foregroundStyle(Theme.secondary)
+                    Text("Read the steps first — they run with \(Prefs.name)'s tools (anything risky still asks you).")
+                        .font(.system(size: 10.5)).foregroundStyle(Theme.tertiary)
+                    HStack {
+                        Button("Add routine") { add(p.name, p.steps); pending = nil }.buttonStyle(.borderedProminent)
+                        Button("Cancel") { pending = nil }
+                    }
+                    .controlSize(.small)
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
+            }
+            HStack {
+                Button("Import from clipboard") { importClipboard() }.controlSize(.small)
+                Spacer()
+            }
+            if !starters.isEmpty {
+                Text("Starters").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.secondary).padding(.top, 4)
+                ForEach(starters) { s in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(s.name).font(.system(size: 12, weight: .medium))
+                            Text(s.blurb).font(.system(size: 10.5)).foregroundStyle(Theme.secondary)
+                        }
+                        Spacer()
+                        Button("Add") { add(s.name, s.steps) }.controlSize(.small).help(s.steps)
+                    }
+                }
+            }
             if let message { Text(message).font(.system(size: 11)).foregroundStyle(Theme.secondary) }
         }
         .onAppear { items = RoutineStore.shared.all() }
+    }
+
+    private func add(_ name: String, _ steps: String) {
+        _ = RoutineStore.shared.save(name: name, steps: steps)
+        items = RoutineStore.shared.all()
+        message = "Added “\(name)” — say it to \(Prefs.name) to run it."
+    }
+
+    private func copyShare(_ r: Routine) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(RoutineGallery.shareText(name: r.name, steps: r.steps), forType: .string)
+        message = "Copied “\(r.name)” — paste it anywhere to share."
+    }
+
+    private func importClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string), let p = RoutineGallery.parse(text) else {
+            message = "The clipboard doesn't hold a shared routine (it starts with “\(RoutineGallery.header)…”)."
+            return
+        }
+        pending = p
     }
 
     private func runNow(_ r: Routine) {
@@ -1104,13 +1166,15 @@ private struct AIPane: View {
         Section(title: "On this Mac — private and free") {
             ForEach([ProviderKind.ollama, .lmstudio, .apple]) { k in
                 row(icon: k == .apple ? "apple.logo" : "desktopcomputer", title: k.label, sub: m.local[k] ?? "Checking…") {
-                    if (m.local[k] ?? "").contains("model") || m.local[k] == "Ready" {
+                    if (m.local[k] ?? "").contains("model") || (m.local[k] ?? "").hasPrefix("Ready") {
                         Button(m.active == k ? "In use" : "Use") { m.connect(k, key: nil) }.disabled(m.active == k)
                     } else if let url = k.keyPage {
                         Link("Get it ↗", destination: url).font(.system(size: 11.5))
                     }
                 }
             }
+            Text("Apple's on-device AI is used by itself when nothing else is connected. Apple's bigger cloud model (Private Cloud Compute, still private) needs a Developer ID build — coming later.")
+                .font(.system(size: 11)).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
         }
 
         if m.active != nil && m.active != .apple {

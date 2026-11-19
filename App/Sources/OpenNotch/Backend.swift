@@ -79,7 +79,7 @@ struct NowPlaying: Equatable {
 
 /// Something the user attached to the next prompt.
 struct Attachment: Identifiable, Equatable {
-    enum Kind: Equatable { case file, screenshot, clipboard, selection, web }
+    enum Kind: Equatable { case file, screenshot, clipboard, selection, web, screen }
     let id = UUID()
     let kind: Kind
     let value: String                // path, or the clipboard text
@@ -89,6 +89,7 @@ struct Attachment: Identifiable, Equatable {
         case .file, .screenshot: return (value as NSString).lastPathComponent
         case .clipboard: return "Clipboard · \(value.count) chars"
         case .selection: return "Selected text · \(value.count) chars"
+        case .screen: return "Screen · " + String((value.components(separatedBy: " — ").first ?? value.components(separatedBy: "\n").first ?? "window").prefix(30))
         case .web: return value.components(separatedBy: "\n").first.map { String($0.prefix(40)) } ?? "Web page"
         }
     }
@@ -98,6 +99,7 @@ struct Attachment: Identifiable, Equatable {
         case .screenshot: return "camera.viewfinder"
         case .clipboard: return "doc.on.clipboard"
         case .selection: return "text.cursor"
+        case .screen: return "macwindow"
         case .web: return "safari"
         }
     }
@@ -230,6 +232,11 @@ final class Backend: ObservableObject {
         }
         for sel in attachments where sel.kind == .selection {
             context.append("Text I have selected\(selectionSource.map { " in \($0)" } ?? ""):\n```\n\(sel.value.prefix(20000))\n```")
+        }
+        for scr in attachments where scr.kind == .screen {
+            // Someone else's words (an email, a chat, a page): fenced like tool results, never instructions.
+            context.append("What's on my screen right now (the window I was in, read just now):\n"
+                           + TurnPolicy.fence(String(scr.value.prefix(12_000)), tool: "screen_text"))
         }
         for page in attachments where page.kind == .web {
             let lines = page.value.components(separatedBy: "\n")
@@ -406,6 +413,9 @@ final class Backend: ObservableObject {
         lastNotice = (text, Date())
         add(.error, text)
     }
+
+    /// A friendly line in the chat (not an error).
+    func info(_ text: String) { add(.info, text) }
 
     func stop() { core.stop() }
 

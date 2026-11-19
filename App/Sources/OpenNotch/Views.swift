@@ -311,8 +311,11 @@ struct AppMenu: View {
 
     var body: some View {
         Button("Settings…") { SettingsWindow.shared.show() }
+        Button("Send Feedback…") { FeedbackWindow.shared.show(good: nil) }
         if let app = MeetingNotes.shared.recordingApp {
             Button("Stop taking notes (\(app))") { MeetingNotes.shared.stop() }
+        } else {
+            Button("Take meeting notes now") { MeetingNotes.shared.start(app: "Meeting", manual: true) }
         }
         if Updater.available { Button("Check for Updates…") { Updater.shared.checkNow() } }
         Menu(KeepAwake.shared.isOn ? "☕ Keeping awake" : "Keep awake") {
@@ -379,8 +382,10 @@ struct AppMenu: View {
                 if !Supervisor.canSupervise {
                     backend.notice("Install to ~/Applications first (scripts/build.sh --install).")
                 } else if Supervisor.writePlist() {
-                    (NSApp.delegate as? AppDelegate)?.prepareForExit()
-                    Supervisor.handOverAndExit()     // comes straight back, now supervised
+                    UserDefaults.standard.removeObject(forKey: Supervisor.failedKey)     // asked for: try again
+                    Supervisor.handOverOrStay { (NSApp.delegate as? AppDelegate)?.prepareForExit() }  // comes back supervised
+                    backend.notice("macOS didn't let OpenNotch restart itself in the background, so it keeps running as it is. "
+                                   + "Check System Settings › General › Login Items & Extensions.")
                 }
             }
             keepRunning = !Supervisor.disabled && Supervisor.installed
@@ -421,6 +426,12 @@ struct CollapsedView: View {
                     HStack { Spacer(); PrivacyLeftEar(state: notch.privacy) }.padding(.trailing, 14).frame(width: ear)
                     Spacer().frame(width: notch.notchSize.width)
                     PrivacyRightEar(state: notch.privacy).frame(width: ear)
+                case .meeting:
+                    if let m = TodayModel.shared.earMeeting {
+                        MeetingEars(meeting: m, right: false).frame(width: ear)
+                        Spacer().frame(width: notch.notchSize.width)
+                        MeetingEars(meeting: m, right: true).frame(width: ear)
+                    }
                 case .awake:
                     AwakeEars(side: false).frame(width: ear)
                     Spacer().frame(width: notch.notchSize.width)
@@ -495,6 +506,8 @@ struct CollapsedView: View {
             let p = notch.privacy
             return (p.micApps.isEmpty ? "" : "\(p.micApps.joined(separator: ", ")) is using the microphone. ")
                 + (p.camera ? "Camera is on." : "")
+        case .meeting:
+            return TodayModel.shared.earMeeting.map { "\($0.title) starts in \(TodayLogic.countdown(to: $0.start, now: Date()))" } ?? "Meeting soon"
         case .awake:
             return "Keeping your Mac awake, " + HealthLogic.awakeLabel(until: KeepAwake.shared.until)
                 .replacingOccurrences(of: "∞", with: "until you stop it")
@@ -1281,6 +1294,10 @@ struct EmptyState: View {
     var body: some View {
         VStack(spacing: 16) {
             ForYouSection(engine: hub.proactive).opacity(leaving ? 0 : 1)
+            TodayStrip(today: TodayModel.shared) {
+                backend.send("Plan my day: look at today's calendar events, my open reminders and the weather where I am, then give me a short, focused plan.")
+            }
+            .opacity(leaving ? 0 : 1)
             HeroAvatar(proactive: hub.proactive, backend: backend, leaving: leaving)
             VStack(spacing: 4) {
                 Text("Hi, I'm \(assistantName). What can I do for you?")

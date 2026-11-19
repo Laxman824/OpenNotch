@@ -9,10 +9,11 @@ import SwiftUI
 
 /// Pure rules (checked in AgentChecks).
 enum OnboardingLogic {
-    enum Brain: Equatable { case none, apple, other(String) }
+    enum Brain: Equatable { case none, apple, appleSoon, other(String) }
 
-    static func brain(connected: Bool, kind: ProviderKind?) -> Brain {
-        guard connected, let kind else { return .none }
+    /// `appleSoon`: no AI yet, but Apple's model is downloading (or switched off) — it's adopted by itself when ready.
+    static func brain(connected: Bool, kind: ProviderKind?, apple: AppleLogic.Status = .never) -> Brain {
+        guard connected, let kind else { return apple == .waiting && (kind == nil || kind == .apple) ? .appleSoon : .none }
         return kind == .apple ? .apple : .other(kind.label)
     }
 
@@ -339,10 +340,11 @@ struct OnboardingView: View {
     }
 
     @ViewBuilder private var brain: some View {
-        let b = OnboardingLogic.brain(connected: backend.aiConnected, kind: ProviderStore.activeKind)
+        let b = OnboardingLogic.brain(connected: backend.aiConnected, kind: ProviderStore.activeKind,
+                                      apple: AppleOnDeviceProvider.status)
         VStack(spacing: 16) {
             VStack(spacing: 6) {
-                Text(b == .none ? "Give me a brain" : "My brain").font(Typo.title(19))
+                Text(b == .none || b == .appleSoon ? "Give me a brain" : "My brain").font(Typo.title(19))
                 Text(brainText(b)).font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
@@ -357,6 +359,9 @@ struct OnboardingView: View {
             case .apple:
                 primary("Keep Apple's AI") { go(5) }
                 secondary("Sign in with OpenRouter — free, smarter") { ai.signInOpenRouter() }
+            case .appleSoon:
+                primary("Use it when it's ready") { go(5) }
+                secondary("Sign in with OpenRouter — free, works now") { ai.signInOpenRouter() }
             case .none:
                 primary("Sign in with OpenRouter — free, no card") { ai.signInOpenRouter() }
                 HStack(spacing: 16) {
@@ -371,6 +376,10 @@ struct OnboardingView: View {
         switch b {
         case .none:
             return "I need an AI to think with. The quickest way is free: sign in with OpenRouter in your browser. Or paste a key from OpenAI, Anthropic, Gemini or Groq, or run a local model."
+        case .appleSoon:
+            return AppleOnDeviceProvider.availability?.contains("downloading") == true
+                ? "Apple's free on-device AI is still downloading to this Mac. I'll switch to it by myself the moment it's ready — private, works offline. Want answers right now? Sign in with OpenRouter (also free)."
+                : "Turn on Apple Intelligence in System Settings › Apple Intelligence & Siri and I'll use it by myself — free, private, works offline. Or sign in with OpenRouter (also free)."
         case .apple:
             return "I'm using Apple's on-device AI — free, private, works offline. It's fine for quick questions and short texts. For bigger jobs (several steps, the web, email) sign in with OpenRouter: also free."
         case .other(let name):

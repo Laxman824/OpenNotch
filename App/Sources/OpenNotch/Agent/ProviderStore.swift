@@ -164,7 +164,7 @@ enum ProviderStore {
     /// Returns true if it picked one.
     @discardableResult
     static func adoptFreeDefault() -> Bool {
-        guard activeKind == nil, AppleOnDeviceProvider.availability == nil else { return false }
+        guard AppleLogic.shouldAdopt(activeKind: activeKind, status: AppleOnDeviceProvider.status) else { return false }
         activeKind = .apple
         return true
     }

@@ -154,9 +154,10 @@ final class NotchController: ObservableObject {
         hud != nil || (backend?.busy ?? false) || (backend?.needsUser ?? false)
             || (handsFree?.isOn ?? false) || (backend?.unseenAnswer ?? false) || hub?.timers.kind != nil
             || (backend?.nowPlaying.playing ?? false) || KeepAwake.shared.isOn || privacy.active
+            || TodayModel.shared.earMeeting != nil
     }
 
-    enum EarActivity { case hud, agent, timer, music, privacy, awake, none }
+    enum EarActivity { case hud, agent, meeting, timer, music, privacy, awake, none }
 
     private var perchHost: NSView?
     let perchModel = PerchModel()
@@ -206,6 +207,7 @@ final class NotchController: ObservableObject {
         if hud != nil { return .hud }
         if (backend?.busy ?? false) || (backend?.needsUser ?? false) || (handsFree?.isOn ?? false)
             || (backend?.unseenAnswer ?? false) { return .agent }
+        if TodayModel.shared.earMeeting != nil { return .meeting }       // a meeting in ≤ 15 min beats a timer
         if hub?.timers.kind != nil { return .timer }
         if backend?.nowPlaying.playing ?? false { return .music }
         if privacy.active { return .privacy }
@@ -247,6 +249,7 @@ final class NotchController: ObservableObject {
             if case .health = hud { return 132 }
             return 100
         case .awake: return 62
+        case .meeting: return 104
         case .privacy: return 104
         default: return 65
         }

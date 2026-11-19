@@ -53,8 +53,8 @@ final class AgentCore {
     }
 
     var tools: [AgentTool] {
-        ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all() + RoutineTools.all() + WatchTools.all()
-            + [AskLogic.tool, ScriptLogic.tool { ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all() },
+        ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all() + RoutineTools.all() + WatchTools.all() + CalendarTools.all() + DocSearch.all() + PhotosTools.all()
+            + [AskLogic.tool, ScriptLogic.tool { ToolKit.all() + DailyTools.all() + RecallTools.all() + MacTools.all() + CalendarTools.all() + DocSearch.all() },
                ToolRouter.moreTools(connectors: MCPManager.shared.groups)]
             + MCPManager.shared.tools
     }
@@ -611,12 +611,12 @@ final class AgentCore {
         let name = UserDefaults.standard.string(forKey: "assistantName") ?? "Ledge"
         let f = DateFormatter()
         f.dateFormat = "EEEE d MMMM yyyy"
-        if provider.contextChars < 20_000 {
+        if provider.compactPrompt {
             // Small on-device/local models: a few hundred tokens, not two thousand.
             var s = """
             You are \(name), a helpful assistant in the user's MacBook notch. Be brief and direct; short paragraphs. \
             Use a tool when one fits instead of guessing, and never claim something a tool didn't confirm. \
-            Each user message ends with a "Sent:" time — that's now. Today is \(f.string(from: Date())).
+            \(provider is AppleOnDeviceProvider ? "" : "Each user message ends with a \"Sent:\" time — that's now. ")Today is \(f.string(from: Date())).
             """
             let mem = MemoryStore.shared.promptBlock(maxChars: 600)
             if !mem.isEmpty { s += "\n\nAbout the user:\n" + mem }

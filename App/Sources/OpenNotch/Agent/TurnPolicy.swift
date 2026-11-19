@@ -32,7 +32,7 @@ enum TurnPolicy {
     static let parallelSafe: Set<String> = [
         "read_file", "list_directory", "search_text", "find_files", "fetch_url", "web_search",
         "system_info", "calendar_events", "reminders_list", "weather", "contacts_find",
-        "list_scheduled", "recall", "search_chats", "spotlight_search", "shortcuts_list",
+        "list_scheduled", "recall", "search_chats", "spotlight_search", "shortcuts_list", "calendars_list", "search_documents",
     ]
 
     /// Indices of `calls` to run together up front: the leading run of parallel-safe
@@ -54,7 +54,7 @@ enum TurnPolicy {
     /// Tools whose results are text written by someone else (web pages, email, notes, MCP servers).
     static func isExternal(_ tool: String) -> Bool {
         ["fetch_url", "web_search", "mail_recent", "mail_read", "notes_search", "notes_read", "active_tab",
-         "screen_text", "shortcuts_run", "run_script"].contains(tool)
+         "screen_text", "shortcuts_run", "run_script", "search_documents"].contains(tool)
             || tool.hasPrefix("mcp__")
     }
 

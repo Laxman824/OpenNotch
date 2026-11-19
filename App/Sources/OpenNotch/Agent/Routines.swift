@@ -265,3 +265,51 @@ enum RoutineTools {
             return await ShortcutExport.export(r)
         })
 }
+
+/// Starter routines and sharing as plain text (checked in AgentChecks). Sharing is copy → paste → Import, which
+/// always shows the steps before saving; there's deliberately no web link that creates a routine.
+enum RoutineGallery {
+    struct Starter: Identifiable, Equatable { let name: String; let blurb: String; let steps: String; var id: String { name } }
+
+    static let starters: [Starter] = [
+        Starter(name: "start work", blurb: "Your day at a glance and what to do first",
+                steps: "Show today's calendar and the reminders due today, the weather where I am, and unread emails from real people "
+                    + "(skip newsletters and notifications). Then suggest the three things I should do first."),
+        Starter(name: "prep my next meeting", blurb: "Context on the people and topic, 3 bullets",
+                steps: "Find my next calendar event. Search my email and documents for anything about it and the people in it. "
+                    + "Give me three short bullets and one good question to ask."),
+        Starter(name: "inbox zero", blurb: "Sort unread mail, draft the replies",
+                steps: "Check my unread emails and group them into: needs a reply, read later, ignore. Offer to draft replies for the "
+                    + "first group — drafts only, I'll review them."),
+        Starter(name: "focus hour", blurb: "Timer, Mac stays awake, break reminder",
+                steps: "Start a 50-minute focus timer, keep the Mac awake for an hour, and remind me to take a break in 50 minutes."),
+        Starter(name: "wrap up", blurb: "What's left today and tomorrow morning",
+                steps: "Summarise what's left on my calendar today and tomorrow morning, list the reminders still open, and write me "
+                    + "a short end-of-day note with what to start with tomorrow."),
+        Starter(name: "weekly review", blurb: "Last week, next week, three priorities",
+                steps: "List my calendar events from the last 7 days and the next 7 days and my open reminders, then help me pick "
+                    + "three priorities for the week."),
+        Starter(name: "travel check", blurb: "Weather and bookings for upcoming trips",
+                steps: "Look at my calendar for trips in the next 7 days. For each destination give the weather forecast and anything "
+                    + "in my email about bookings or tickets."),
+    ]
+
+    static let header = "OpenNotch routine — "
+    static let footer = "(Paste into OpenNotch › Settings › AI › Routines › Import from clipboard)"
+
+    static func shareText(name: String, steps: String) -> String {
+        header + name + "\n" + steps + "\n" + footer
+    }
+
+    /// A shared routine back from text: needs the header line; steps are what follows (footer dropped), 1–2000 chars.
+    static func parse(_ text: String) -> (name: String, steps: String)? {
+        let lines = text.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
+        guard let i = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix(header) }) else { return nil }
+        let rawName = String(lines[i].trimmingCharacters(in: .whitespaces).dropFirst(header.count))
+        guard let name = RoutineLogic.cleanName(rawName) else { return nil }
+        let steps = lines[(i + 1)...].filter { $0.trimmingCharacters(in: .whitespaces) != footer }
+            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (1...2000).contains(steps.count) else { return nil }
+        return (name, steps)
+    }
+}

@@ -44,6 +44,27 @@ enum MeetingLogic {
         return String(transcript.prefix(max / 3)) + "\n\n[… middle of the call omitted …]\n\n" + String(transcript.suffix(max * 2 / 3))
     }
 
+    /// Chips under the notes: each is a normal chat message, so drafting and reminders go through approvals.
+    /// Only offered when the notes give the AI something to work from.
+    static func followUps(notes: String) -> [String] {
+        let lower = notes.lowercased()
+        var out: [String] = []
+        let hasActions = lower.contains("action items") && !lower.contains("action items** — none")
+            && !lower.contains("action items**\nnone") && !lower.contains("action items — none")
+        if lower.contains("**summary**") || hasActions { out.append("Draft a follow-up email") }
+        if hasActions, lower.range(of: #"\b(me|my|i)\b\s*[—–-]"#, options: .regularExpression) != nil {
+            out.append("Remind me of my action items")
+        }
+        if lower.range(of: #"\b(next (meeting|call|sync|week)|follow[- ]up (call|meeting)|meet again|reconvene|catch up (on|next))\b"#,
+                       options: .regularExpression) != nil {
+            out.append("Put the next meeting on my calendar")
+        }
+        return out
+    }
+
+    /// How much transcript fits the connected model (Apple's on-device model has ~24k chars at most).
+    static func clipLimit(contextChars: Int) -> Int { max(4_000, min(60_000, contextChars - 4_000)) }
+
     static func fileName(_ d: Date, app: String) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH.mm"
@@ -202,7 +223,9 @@ final class MeetingNotes: ObservableObject {
                                     actionLabel: "Take notes", action: .startNotes(app)))
     }
 
-    func start(app: String) {
+    /// `manual`: started from the menu (an in-person meeting, or a call app we don't know) — it doesn't stop
+    /// when other apps free the mic, only from the menu (or after 3 hours).
+    func start(app: String, manual: Bool = false) {
         guard recordingApp == nil else { return }
         if !CGPreflightScreenCaptureAccess() {
             notch?.yieldForSystemPrompt("Screen & System Audio Recording")
@@ -229,8 +252,9 @@ final class MeetingNotes: ObservableObject {
                                 self.recordingApp = nil
                                 self.backend?.notice("Couldn't start call notes: \(err)")
                             } else {
-                                self.notch?.showAlert(.info(icon: "record.circle", text: "Taking notes · \(app) — stops when the call ends"), for: 5)
-                                self.watchForEnd()
+                                self.notch?.showAlert(.info(icon: "record.circle", text: manual
+                                    ? "Taking notes — stop from the ⋯ menu" : "Taking notes · \(app) — stops when the call ends"), for: 5)
+                                self.watchForEnd(manual: manual)
                             }
                         }
                     }
@@ -240,12 +264,14 @@ final class MeetingNotes: ObservableObject {
     }
 
     /// The call ended when the mic and camera have been free for ~30 s.
-    private func watchForEnd() {
+    private func watchForEnd(manual: Bool = false) {
         quietPolls = 0
         watch?.invalidate()
         watch = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.recordingApp != nil else { return }
+                if Date().timeIntervalSince(self.started) > 3 * 3600 { self.stop(); return }
+                if manual { return }
                 let busy = self.notch?.privacy.micApps.contains { $0 != "OpenNotch" } ?? false
                 self.quietPolls = busy ? 0 : self.quietPolls + 1
                 if self.quietPolls >= 3 { self.stop() }
@@ -278,7 +304,8 @@ final class MeetingNotes: ObservableObject {
             proactive?.proposeNotes(app: app, body: "Transcript saved to \(path). Connect an AI in Settings › AI to get summaries.")
             return
         }
-        let prompt = MeetingLogic.summaryPrompt(transcript: MeetingLogic.clip(transcript), app: app, minutes: minutes)
+        let limit = MeetingLogic.clipLimit(contextChars: backend.core.provider.contextChars)
+        let prompt = MeetingLogic.summaryPrompt(transcript: MeetingLogic.clip(transcript, max: limit), app: app, minutes: minutes)
         Task { @MainActor in
             let notes = (try? await backend.core.complete(prompt, system: "You write accurate, concise meeting notes.")) ?? ""
             if !notes.isEmpty {

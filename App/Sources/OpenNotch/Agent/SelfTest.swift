@@ -35,6 +35,7 @@ enum SelfTest {
             return 1
         }
         print("model: \(provider.model)")
+        if kind == .apple { print("apple: \(AppleOnDeviceProvider.readyDetail) · \(provider.contextChars) chars · tools \(AppleLogic.tools(contextTokens: AppleOnDeviceProvider.contextTokens).joined(separator: ", "))") }
         let prompt = ProcessInfo.processInfo.environment["OPENNOTCH_PROMPT"]
             ?? "What is 17 × 23? Then use the system_info tool and tell me which macOS version I'm on, in one line."
         let core = AgentCore(ephemeral: provider)

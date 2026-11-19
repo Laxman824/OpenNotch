@@ -301,7 +301,10 @@ final class ProactiveEngine: ObservableObject {
                 backend?.notice("Your week card is copied — paste it into a message or post. It's also saved in Finder.")
             }
         case .notes:
-            if let text = p.body { backend?.showLocalExchange(user: "Notes from my call", reply: text) }
+            if let text = p.body {
+                backend?.showLocalExchange(user: "Notes from my call", reply: text)
+                backend?.followUps = MeetingLogic.followUps(notes: text)     // draft email · reminders · next meeting
+            }
         case .watch:
             if let text = p.body { backend?.showLocalExchange(user: p.prompt ?? "Watcher", reply: text) }
         case .memory:

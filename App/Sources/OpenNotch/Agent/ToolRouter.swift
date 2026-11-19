@@ -23,8 +23,8 @@ enum ToolRouter {
               tools: ["write_file", "edit_file", "search_text"]),
         Group(name: "mail", pattern: #"\b(e-?mails?|inbox|mail|reply|replies|unread|gmail|outlook|draft|send it)\b"#,
               tools: ["mail_recent", "mail_read", "mail_draft", "mail_send", "contacts_find"]),
-        Group(name: "calendar", pattern: #"\b(calendar|meetings?|events?|agenda|schedule|today|tomorrow|this week|plan my day|remind(er)?s?|due)\b"#,
-              tools: ["calendar_events", "create_event", "reminders_list", "create_reminder"]),
+        Group(name: "calendar", pattern: #"\b(calendars?|meetings?|events?|agenda|schedule|today|tomorrow|this week|plan my day|remind(er)?s?|due|invite|invitation|book (a )?(call|meeting|slot)|set up (a )?(call|meeting)|google meet|calendly)\b"#,
+              tools: ["calendar_events", "create_event", "reminders_list", "create_reminder", "calendars_list", "invite_event"]),
         Group(name: "notes_app", pattern: #"\b(apple notes?|notes app|my notes|an? note|note (about|on|for|called))\b"#,
               tools: ["notes_search", "notes_read", "notes_create"]),
         Group(name: "contacts", pattern: #"\b(contacts?|phone number|email address|birthday|number for|'s email)\b"#,
@@ -45,8 +45,10 @@ enum ToolRouter {
               tools: ["routine_save", "routine_list", "routine_run", "routine_delete", "routine_export_shortcut"]),
         Group(name: "watch", pattern: #"\b(watchers?|(stop|keep|what am i) watching|keep an eye|let me know (when|if|as soon as)|tell me (when|if|as soon as)|notify me|alert me|ping me (when|if)|monitor (it|this|that|the|for)|as soon as (it|they|she|he))\b"#,
               tools: ["watch_start", "watch_list", "watch_stop"]),
-        Group(name: "find", pattern: #"\b(find|where('?s| is| did i)|locate|look for|search (my|for|the)|the (pdf|doc|docx|document|file|deck|spreadsheet|presentation|photo|screenshot|invoice|receipt|contract)|sent me|i (saved|downloaded))\b"#,
-              tools: ["spotlight_search"]),
+        Group(name: "photos", pattern: #"\b(photos?|pictures?|pics|selfies?|images? of|my album|photo library|snaps)\b"#,
+              tools: ["photos_search"]),
+        Group(name: "find", pattern: #"\b(find|where('?s| is| did i)|locate|look for|search (my|for|the)|the (pdf|doc|docx|document|file|deck|spreadsheet|presentation|photo|screenshot|invoice|receipt|contract)|sent me|i (saved|downloaded)|my (lease|contract|agreement|policy|offer letter|insurance|invoice|statement|documents?|files|notes|resume|cv)|what does (my|the) \w+( \w+)? say|according to (my|the))\b"#,
+              tools: ["spotlight_search", "search_documents"]),
     ]
 
     /// Picks the tools for this request. `extra` = groups asked for via more_tools; `connectors` = one

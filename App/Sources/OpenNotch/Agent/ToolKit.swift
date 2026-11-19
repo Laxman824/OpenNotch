@@ -617,21 +617,27 @@ enum ToolKit {
     static let calendar: [AgentTool] = [
         AgentTool(
             name: "calendar_events",
-            description: "List calendar events from today for the next N days (default 1, max 14).",
-            schema: Schema.object(["days": Schema.integer("How many days, starting today")]),
+            description: "List calendar events from today for the next N days (default 1, max 14), across every account "
+                + "(iCloud, Google, Exchange…), with the calendar, guests and any video-call link.",
+            schema: Schema.object(["days": Schema.integer("How many days, starting today"),
+                                   "calendar": Schema.string("Only this calendar or account (optional; see calendars_list)")]),
             risk: .read, verb: "Checking the calendar", detail: { "\($0.int("days") ?? 1) day(s)" }, preview: { _ in "" },
             run: { a in
                 if let no = await ensureAccess(.event) { return .fail(no) }
-                return calendarEvents(days: min(14, max(1, a.int("days") ?? 1)))
+                return calendarEvents(days: min(14, max(1, a.int("days") ?? 1)), only: a.str("calendar"))
             }),
         AgentTool(
             name: "create_event",
-            description: "Add a calendar event. Times as ISO 8601 local time, e.g. 2026-10-02T15:00.",
+            description: "Add an event to the user's own calendar (no guests — use invite_event to invite people). "
+                + "Times as ISO 8601 local time, e.g. 2026-10-02T15:00.",
             schema: Schema.object(["title": Schema.string("Title"), "start": Schema.string("Start (ISO 8601)"),
                                    "end": Schema.string("End (optional, default 1 hour later)"),
-                                   "notes": Schema.string("Notes (optional)")], required: ["title", "start"]),
+                                   "notes": Schema.string("Notes (optional)"),
+                                   "location": Schema.string("Place or video link (optional)"),
+                                   "calendar": Schema.string("Calendar or account to add it to (optional; default calendar otherwise)")],
+                                  required: ["title", "start"]),
             risk: .confirm, verb: "Adding an event", detail: { $0.str("title") ?? "" },
-            preview: { "“\($0.str("title") ?? "")” at \($0.str("start") ?? "?")" }, run: { a in
+            preview: { "“\($0.str("title") ?? "")” at \($0.str("start") ?? "?")" + ($0.str("calendar").map { " · \($0)" } ?? "") }, run: { a in
                 if let no = await ensureAccess(.event) { return .fail(no) }
                 return createEvent(a)
             }),
@@ -679,19 +685,38 @@ enum ToolKit {
         return ISO8601DateFormatter().date(from: s)
     }
 
-    static func calendarEvents(days: Int) -> ToolOutcome {
+    static func calendarEvents(days: Int, only: String? = nil) -> ToolOutcome {
         guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
             return .fail("Calendar access isn't allowed — turn it on in Settings › Permissions.")
         }
         let start = Calendar.current.startOfDay(for: Date())
         let end = Calendar.current.date(byAdding: .day, value: days, to: start)!
-        let events = eventStore.events(matching: eventStore.predicateForEvents(withStart: start, end: end, calendars: nil))
+        var calendars: [EKCalendar]? = nil
+        if let only, !only.trimmingCharacters(in: .whitespaces).isEmpty {
+            let q = only.lowercased()
+            let match = eventStore.calendars(for: .event).filter {
+                $0.title.lowercased().contains(q) || ($0.source?.title.lowercased().contains(q) ?? false)
+            }
+            guard !match.isEmpty else {
+                return .fail("No calendar or account matches “\(only)”. Calendars:\n" + CalendarLogic.listing(CalendarTools.cals()))
+            }
+            calendars = match
+        }
+        let events = eventStore.events(matching: eventStore.predicateForEvents(withStart: start, end: end, calendars: calendars))
             .sorted { $0.startDate < $1.startDate }
         if events.isEmpty { return ToolOutcome(ok: true, text: "No events.") }
         let f = DateFormatter(); f.dateFormat = "EEE d MMM HH:mm"
+        let many = Set(events.compactMap { $0.calendar?.source?.title }).count > 1
         return ToolOutcome(ok: true, text: events.prefix(60).map { e in
             let when = e.isAllDay ? "all day \(DateFormatter.localizedString(from: e.startDate, dateStyle: .short, timeStyle: .none))" : f.string(from: e.startDate)
-            return "- \(when): \(e.title ?? "(no title)")" + (e.location.map { " @ \($0)" } ?? "")
+            var line = "- \(when): \(e.title ?? "(no title)")" + (e.location.map { $0.isEmpty ? "" : " @ \($0)" } ?? "")
+            if let cal = e.calendar { line += " [\(cal.title)" + (many ? " · \(cal.source?.title ?? "")" : "") + "]" }
+            if let people = e.attendees, !people.isEmpty {
+                let names = people.prefix(4).map { $0.name ?? $0.url.absoluteString.replacingOccurrences(of: "mailto:", with: "") }
+                line += " · with " + names.joined(separator: ", ") + (people.count > 4 ? " +\(people.count - 4)" : "")
+            }
+            if let link = CalendarLogic.joinLink([e.url?.absoluteString, e.location, e.notes]) { line += " · join: \(link)" }
+            return line
         }.joined(separator: "\n"))
     }
 
@@ -705,8 +730,19 @@ enum ToolKit {
         e.startDate = start
         e.endDate = parseDate(a.str("end")) ?? start.addingTimeInterval(3600)
         e.notes = a.str("notes")
-        guard let cal = eventStore.defaultCalendarForNewEvents else {
-            return .fail("There's no default calendar to add to — pick one in Calendar › Settings › General.")
+        if let loc = a.str("location"), !loc.isEmpty { e.location = loc }
+        let cal: EKCalendar
+        if let asked = a.str("calendar"), !asked.trimmingCharacters(in: .whitespaces).isEmpty {
+            guard let pick = CalendarLogic.pick(CalendarTools.cals(), query: asked), let c = CalendarTools.ekCalendar(for: pick) else {
+                return .fail("No single writable calendar matches “\(asked)”. Pick one of these (as \"Title (account)\"):\n"
+                             + CalendarLogic.listing(CalendarTools.cals()))
+            }
+            cal = c
+        } else {
+            guard let c = eventStore.defaultCalendarForNewEvents else {
+                return .fail("There's no default calendar to add to — pick one in Calendar › Settings › General.")
+            }
+            cal = c
         }
         e.calendar = cal
         do { try eventStore.save(e, span: .thisEvent) } catch { return .fail("Couldn't save the event: \(error.localizedDescription)") }
@@ -714,7 +750,7 @@ enum ToolKit {
         guard let id = e.eventIdentifier, eventStore.event(withIdentifier: id) != nil else {
             return .fail("Calendar accepted the event but it can't be found afterwards — check the \(cal.title) calendar.")
         }
-        return ToolOutcome(ok: true, text: "Added “\(title)” to \(cal.title) on \(DateFormatter.localizedString(from: start, dateStyle: .medium, timeStyle: .short)) (checked).")
+        return ToolOutcome(ok: true, text: "Added “\(title)” to \(cal.title) (\(cal.source?.title ?? "")) on \(DateFormatter.localizedString(from: start, dateStyle: .medium, timeStyle: .short)) (checked).")
     }
 
     static func createReminder(_ a: ToolArgs) -> ToolOutcome {

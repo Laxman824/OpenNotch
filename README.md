@@ -44,7 +44,12 @@ Lisbon"), which is saved only when you click Save (see and delete them in Settin
 **summarising** what scrolled out of its context, runs independent lookups **in parallel**, and ends
 answers with **one-tap follow-ups**. Ask it something and close the notch: the ears say **Ready** when it's done.
 
-**Everyday superpowers:** hold **⌥⇧D** and talk — your words are typed (and tidied) into any app. When a Zoom,
+**Everyday superpowers:** press **⌥⇧A** in any app — an email, a page, a PDF, an error — and ask about it: explain,
+summarise, draft a reply, turn it into reminders. Ask **"when does my lease renew?"** and it answers from your own
+documents (even photographed receipts), citing the file and page — or finds pictures in Photos. It works across **every
+calendar account** (several Google accounts too) and **prepares invites** in Google Calendar or Outlook — guests and time filled in, you add Meet and click Save. It **reaches out
+first**: overlapping meetings, overdue reminders, the PDF you just downloaded, a friend's birthday, the meeting starting in
+5 minutes — always politely, never during calls. Hold **⌥⇧D** and talk — your words are typed (and tidied) into any app. When a Zoom,
 Teams, Meet or FaceTime call starts, Ledge offers to **take notes** — transcribed on your Mac, then a summary with
 decisions and action items, no bot joining the call. Around 6 pm it **wraps up your day**, and on Fridays it shows
 **your week with Ledge** (time saved) as a card you can share. It **stays quiet while you watch a video**, present,
