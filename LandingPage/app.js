@@ -53,7 +53,11 @@ const SECTION_EARS = {
   ai: { mood: "thinking", html: () => `<div><small style="color:var(--g2)">MODEL</small>your choice</div>` },
   puff: { mood: "happy", html: () => `<div><small style="color:var(--g3)">THAT'S ME</small>poke me ↓</div>` },
   buddies: { mood: "happy", html: () => `<span class="ear-art"></span>${wave}` },
-  install: { mood: "idle", html: () => `<div><small style="color:var(--green)">FREE</small>v0.1 · MIT</div>` },
+  install: { mood: "idle", html: () => `<div><small style="color:var(--green)">FREE</small>v${window.onVersion || "0.1.6"} · MIT</div>` },
+  compare: { mood: "happy", html: () => `<div><small style="color:var(--g1)">VS SIRI</small>does the work</div>` },
+  new: { mood: "happy", html: () => `<div><small style="color:var(--g2)">NEW</small>in 0.1.6</div>` },
+  reach: { mood: "alert", html: () => `<div><small style="color:var(--g4)">HEADS UP</small>meeting clash</div>` },
+  trace: { mood: "thinking", html: () => `<div><small style="color:var(--cyan)">TRACE</small>every step</div>` },
   final: { mood: "happy", html: () => `<div><small style="color:var(--g4)">READY</small>give it a job</div>` },
 };
 let earI = 0, open = false, hover = false, demoRun = 0, section = "demo";
@@ -394,3 +398,177 @@ $$(".lchip[data-k]").forEach((el) => {
 $$(".wl").forEach((el) => {
   el.innerHTML = el.dataset.l.split(" ").map((k) => k === "groq" ? '<span><b class="t">groq</b></span>' : `<span>${window.logoSVG(k)}</span>`).join("");
 });
+
+
+// ── New in 0.1.6: small loops that run only while their card is on screen ──
+const whileVisible = (el, start) => {
+  if (!el || reduce) return;
+  let stop = null;
+  new IntersectionObserver((es) => es.forEach((e) => {
+    if (e.isIntersecting && !stop) stop = start();
+    else if (!e.isIntersecting && stop) { stop(); stop = null; }
+  }), { threshold: 0.25 }).observe(el);
+};
+
+// The notch countdown to the next meeting.
+whileVisible($("#todayCount"), () => {
+  let m = 5;
+  const el = $("#todayCount");
+  const t = setInterval(() => { m = m <= 1 ? 5 : m - 1; el.textContent = m === 1 ? "now" : `${m - 1}m`; el.classList.toggle("soon", m <= 2); }, 1600);
+  return () => clearInterval(t);
+});
+
+// The live progress card ticking through its steps.
+whileVisible($("#progCard"), () => {
+  const list = $("#progList"), head = $("#progHead"), time = $("#progTime");
+  const script = [
+    ["Finding a contact", "Priya", "120 ms"], ["Finding a contact", "Sam", "140 ms"],
+    ["Checking the calendar", "Friday", "0.3 s"], ["Preparing an invite", "Launch sync", "0.2 s"],
+  ];
+  const past = (v) => v.replace(/^Finding/, "Found").replace(/^Checking/, "Checked").replace(/^Preparing/, "Prepared");
+  let i = 0, secs = 0;
+  const draw = () => {
+    list.innerHTML = "";
+    script.slice(Math.max(0, i - 2), i + 1).forEach(([v, d, ms], k, arr) => {
+      const li = document.createElement("li");
+      const done = k < arr.length - 1 || i >= script.length;
+      li.className = done ? "done" : "doing";
+      li.textContent = done ? past(v) + " " : v + " ";
+      const sp = document.createElement("span"); sp.textContent = done ? `${d} · ${ms}` : d; li.appendChild(sp);
+      list.appendChild(li);
+    });
+    head.textContent = i >= script.length ? "Writing the answer" : script[i][0];
+  };
+  draw();
+  const t = setInterval(() => { secs++; time.textContent = `${secs} s`; if (secs % 2 === 0) { i = i >= script.length ? 0 : i + 1; if (i === 0) secs = 0; draw(); } }, 900);
+  return () => clearInterval(t);
+});
+
+// "It taps you on the shoulder": nudges drop out of the notch one after another.
+whileVisible($("#toast"), () => {
+  const nudges = [
+    ["📅", "Two meetings overlap at 3 PM tomorrow", "Design review · Coffee with Sam", "Sort it out"],
+    ["⏰", "3 reminders are overdue", "Want to pick new times?", "Reschedule"],
+    ["📄", "Just downloaded: Offer Letter.pdf", "Want the gist?", "Summarise"],
+    ["🎂", "It's Sam's birthday today", "Send a note?", "Draft a message"],
+    ["📹", "Standup in 5 min", "Join link ready", "Join"],
+  ];
+  const toast = $("#toast");
+  let i = 0, t2 = 0;
+  const show = () => {
+    const [ic, title, detail, btn] = nudges[i++ % nudges.length];
+    $("#toastIc").textContent = ic; $("#toastT").textContent = title; $("#toastD").textContent = detail; $("#toastB").textContent = btn;
+    toast.classList.add("on");
+    t2 = setTimeout(() => toast.classList.remove("on"), 2600);
+  };
+  show();
+  const t = setInterval(show, 3400);
+  return () => { clearInterval(t); clearTimeout(t2); toast.classList.remove("on"); };
+});
+
+// ── Theme: follows the system unless picked; remembered on this device ──
+(() => {
+  const btn = $("#themeBtn");
+  if (!btn) return;
+  const sysLight = matchMedia("(prefers-color-scheme: light)");
+  const current = () => document.documentElement.dataset.theme || (sysLight.matches ? "light" : "dark");
+  const label = () => btn.setAttribute("aria-label", current() === "light" ? "Switch to dark theme" : "Switch to light theme");
+  label();
+  btn.addEventListener("click", () => {
+    const next = current() === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("on-theme", next); } catch (e) {}
+    label();
+  });
+  sysLight.addEventListener("change", label);
+})();
+
+// ── Social proof: live GitHub stars (cached an hour; hidden if GitHub doesn't answer) ──
+(async () => {
+  const show = (n) => {
+    if (!(n >= 1)) return;
+    const s = $("#starCount"); if (s) { s.textContent = n.toLocaleString(); s.hidden = false; }
+    const t = $("#trustStars"); if (t) t.textContent = `★ ${n.toLocaleString()} on GitHub`;
+  };
+  try {
+    const c = JSON.parse(localStorage.getItem("on-stars") || "null");
+    if (c && Date.now() - c.t < 3600e3) return show(c.n);
+  } catch (e) {}
+  try {
+    const r = await fetch("https://api.github.com/repos/Laxman824/OpenNotch", { headers: { Accept: "application/vnd.github+json" } });
+    if (!r.ok) return;
+    const n = (await r.json()).stargazers_count;
+    show(n);
+    try { localStorage.setItem("on-stars", JSON.stringify({ n, t: Date.now() })); } catch (e) {}
+  } catch (e) {}
+})();
+
+// ── Not on a Mac? Offer the link instead of a DMG they can't open ──
+(() => {
+  const ua = navigator.userAgent;
+  const mobile = /iPhone|iPad|iPod|Android/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua) && !/Chrome|Firefox/.test(ua) && screen.width < 1100);
+  const mac = /Macintosh|Mac OS X/.test(ua) && !mobile;
+  const copy = async (el) => {
+    try { await navigator.clipboard.writeText(location.href.split("#")[0]); el.textContent = "Link copied ✓"; } catch (e) { el.textContent = "Copy this page's link"; }
+  };
+  if (!mac) {
+    const note = $(".notmac"); if (note) note.hidden = false;
+    $$(".btn.dl").forEach((a) => {
+      a.removeAttribute("href");
+      a.setAttribute("role", "button");
+      a.dataset.label = a.textContent.trim();
+      const last = a.lastChild;
+      if (last && last.nodeType === 3) last.textContent = " Send to my Mac"; else a.textContent = "Send to my Mac";
+      a.addEventListener("click", (e) => { e.preventDefault(); copy(a); });
+    });
+  }
+  $$("[data-copylink]").forEach((b) => b.addEventListener("click", () => copy(b)));
+})();
+
+// ── Sticky download bar: after the hero, hidden around the install section and the final call ──
+(() => {
+  const bar = $("#dlbar");
+  if (!bar) return;
+  const hero = $(".hero"), install = $("#install"), final = $(".final");
+  let pastHero = false, nearEnd = false;
+  const update = () => {
+    const on = pastHero && !nearEnd;
+    bar.classList.toggle("on", on);
+    bar.setAttribute("aria-hidden", on ? "false" : "true");
+    $$("a", bar).forEach((a) => a.tabIndex = on ? 0 : -1);
+  };
+  new IntersectionObserver(([e]) => { pastHero = !e.isIntersecting; update(); }, { threshold: 0 }).observe(hero);
+  const ends = new Set();
+  const endIO = new IntersectionObserver((es) => { es.forEach((e) => e.isIntersecting ? ends.add(e.target) : ends.delete(e.target)); nearEnd = ends.size > 0; update(); });
+  [install, final].forEach((el) => el && endIO.observe(el));
+})();
+
+
+// ── Latest release, live from GitHub: version, size and "what's new" update themselves after every release ──
+(async () => {
+  const apply = (r) => {
+    if (!r || !r.v) return;
+    window.onVersion = r.v;
+    $$("[data-ver]").forEach((e) => e.textContent = r.v);
+    if (r.mb) $$("[data-size]").forEach((e) => e.textContent = `${r.mb} MB`);
+    if (r.url) $$("[data-rel]").forEach((e) => e.href = r.url);
+    if (r.at) {
+      const days = Math.floor((Date.now() - Date.parse(r.at)) / 864e5);
+      const age = days <= 0 ? "today" : days === 1 ? "yesterday" : days < 30 ? `${days} days ago` : "";
+      $$("[data-age]").forEach((e) => e.textContent = age ? `, released ${age}` : "");
+    }
+  };
+  try {
+    const c = JSON.parse(localStorage.getItem("on-release") || "null");
+    if (c && Date.now() - c.t < 3600e3) return apply(c.r);
+  } catch (e) {}
+  try {
+    const res = await fetch("https://api.github.com/repos/Laxman824/OpenNotch/releases/latest", { headers: { Accept: "application/vnd.github+json" } });
+    if (!res.ok) return;
+    const j = await res.json();
+    const dmg = (j.assets || []).find((a) => a.name === "OpenNotch.dmg");
+    const r = { v: String(j.tag_name || "").replace(/^v/, ""), mb: dmg ? (dmg.size / 1048576).toFixed(1) : null, url: j.html_url, at: j.published_at };
+    apply(r);
+    try { localStorage.setItem("on-release", JSON.stringify({ r, t: Date.now() })); } catch (e) {}
+  } catch (e) {}
+})();

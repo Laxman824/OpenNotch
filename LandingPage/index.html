@@ -4,10 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenNotch — an AI assistant in your MacBook's notch</title>
-<meta name="description" content="OpenNotch turns your MacBook's notch into an AI assistant that actually does things: 14 tools, hands-free voice, MCP connectors and approvals for anything risky. Free, open source, and your data stays on your Mac.">
-<meta name="theme-color" content="#06060c">
+<meta name="description" content="OpenNotch turns your MacBook's notch into an AI assistant that actually does things — across your mail, calendar, files and documents — reaches out when something needs you, and shows every step. Works out of the box with Apple's on-device AI. Free, open source, and your data stays on your Mac.">
+<meta name="theme-color" content="#f6f5f1">
+<meta name="color-scheme" content="dark light">
+<script>var t="light";try{var v=localStorage.getItem("on-theme");if(v==="light"||v==="dark")t=v;}catch(e){}document.documentElement.dataset.theme=t;</script>
 <meta property="og:title" content="OpenNotch — an AI assistant in your MacBook's notch">
-<meta property="og:description" content="AI, 14 tools and a jelly-blob friend in your notch. Free, open source, local-first.">
+<meta property="og:description" content="An AI assistant in your notch that does the work, reaches out first and shows every step. Free, open source, local-first.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://laxman824.github.io/OpenNotch/">
 <meta property="og:image" content="https://laxman824.github.io/OpenNotch/assets/og.jpg">
@@ -32,15 +34,19 @@
     <div class="p-head"><canvas id="panelPuff" class="p-puff" aria-hidden="true"></canvas><div><b>Ledge</b><small id="pStatus">Ready</small></div><kbd>⌥Space</kbd></div>
     <div class="p-body" id="pBody"></div>
     <nav class="p-nav">
-      <a href="#features">Tools</a><a href="#work">Assistant</a><a href="#voice">Voice</a><a href="#mcp">MCP</a><a href="#privacy">Privacy</a><a href="#companions">Companions</a><a href="#install">Install</a><a href="https://github.com/Laxman824/OpenNotch" target="_blank" rel="noopener">GitHub ↗</a>
+      <a href="#new">New</a><a href="#reach">Proactive</a><a href="#compare">vs Siri</a><a href="#features">Tools</a><a href="#work">Assistant</a><a href="#trace">Transparency</a><a href="#voice">Voice</a><a href="#mcp">MCP</a><a href="#privacy">Privacy</a><a href="#companions">Companions</a><a href="#install">Install</a><a href="https://github.com/Laxman824/OpenNotch" target="_blank" rel="noopener">GitHub ↗</a>
     </nav>
   </div>
 </div>
+<button class="corner theme-btn btn btn-ghost btn-sm" id="themeBtn" type="button" aria-label="Switch to light or dark theme" title="Light / dark">
+  <svg class="i-sun" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></g></svg>
+  <svg class="i-moon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M20.4 14.6A8.5 8.5 0 0 1 9.4 3.6a8.5 8.5 0 1 0 11 11z"/></svg>
+</button>
 <a class="corner corner-r btn btn-ghost btn-sm" href="https://github.com/Laxman824/OpenNotch" target="_blank" rel="noopener">
   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-  <span>Star</span>
+  <span>Star</span><b class="stars" id="starCount" hidden></b>
 </a>
-<span class="corner corner-l">v0.1 · MIT</span>
+<span class="corner corner-l">v<span data-ver>0.1.6</span> · MIT</span>
 
 <main id="top">
 <!-- ───────── Hero: the page notch is the hero object ───────── -->
@@ -50,14 +56,22 @@
   <div class="hero-copy">
     <p class="kicker reveal">Free · Open source · macOS 14+</p>
     <h1 class="reveal">That little black notch? <em>It works for you now.</em></h1>
-    <p class="lede reveal">OpenNotch turns it into an AI assistant that actually <em>does</em> things, with 14 tools, hands-free voice and MCP connectors. Anything risky waits for your OK, and your data stays on your Mac.</p>
+    <p class="lede reveal">OpenNotch turns it into an AI assistant that actually <em>does</em> things — across your mail, calendar, files and documents — taps you on the shoulder when something needs you, and shows every step. Works out of the box with Apple's on-device AI. Anything risky waits for your OK, and your data stays on your Mac.</p>
     <div class="cta reveal">
-      <a class="btn btn-primary" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" target="_blank" rel="noopener">
+      <a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16.4 12.6c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2 0 1.7-.8 3.1-.8 1.5 0 1.9.8 3.2.8 1.3 0 2.1-1.2 2.9-2.4.9-1.4 1.3-2.7 1.3-2.8 0 0-2.4-1-2.4-3.9zM14.1 5.5c.7-.8 1.1-1.9 1-3-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.8-1 2.9 1.1.1 2.1-.6 2.8-1.4z"/></svg>
         Download for macOS
       </a>
       <a class="btn btn-ghost" href="#film">▶ Watch the film</a>
     </div>
+    <p class="micro reveal"><b>Free</b> · macOS 14+ · <span data-size>4.6 MB</span> · No account · <a data-rel href="https://github.com/Laxman824/OpenNotch/releases/latest" target="_blank" rel="noopener">v<span data-ver>0.1.6</span><span data-age></span> — what's new</a></p>
+    <p class="notmac" hidden>OpenNotch is a Mac app. <button type="button" class="linkbtn" data-copylink>Copy the link</button> and open it on your MacBook.</p>
+    <ul class="trust reveal" aria-label="Why people trust it">
+      <li><b>Open source</b> · MIT</li>
+      <li><b id="trustStars">★ on GitHub</b></li>
+      <li><b>0</b> telemetry · no account</li>
+      <li>Runs on <b>Apple's on-device AI</b></li>
+    </ul>
   </div>
   <div class="hero-floor">
     <iframe id="heroBuddy" title="Bee, the live 3D desktop companion — click to poke, drag to throw" loading="eager"></iframe>
@@ -78,9 +92,119 @@
 <!-- ───────── Stats ───────── -->
 <section class="stats">
   <div class="stat reveal"><b data-count="14">14</b><span>notch tools</span></div>
-  <div class="stat reveal"><b data-count="40" data-suffix="+">40+</b><span>agent tools</span></div>
+  <div class="stat reveal"><b data-count="50" data-suffix="+">50+</b><span>agent tools</span></div>
   <div class="stat reveal"><b>Any</b><span>AI — cloud, local or on-device</span></div>
   <div class="stat reveal"><b data-count="0">0</b><span>accounts &amp; telemetry</span></div>
+</section>
+
+<!-- ───────── New in 0.1.6 ───────── -->
+<section class="section" id="new" data-ear="new">
+  <header class="sec-head reveal">
+    <p class="kicker">Just added</p>
+    <h2>Less asking. <em>More doing.</em></h2>
+    <p>Ask about anything on your screen, get answers from your own documents, invite people across every calendar — and watch each step as it happens.</p>
+  </header>
+  <div class="wgrid">
+    <article class="wcard reveal">
+      <div class="wvis askv">
+        <div class="aw"><div class="aw-bar"><i></i><i></i><i></i><span>Mail — Lunch Friday?</span></div>
+          <p><b>Priya:</b> Are we still on for Friday? Could you send the deck before?</p></div>
+        <div class="keys" aria-hidden="true"><kbd>⌥</kbd><kbd>⇧</kbd><kbd>A</kbd></div>
+        <div class="asks"><span>Draft a reply</span><span>Summarise</span><span>Make reminders</span></div>
+      </div>
+      <h3>Ask about any window</h3>
+      <p>Press ⌥⇧A in an email, a page, a PDF or an error. It reads that window and offers the right next step.</p>
+    </article>
+    <article class="wcard reveal">
+      <div class="wvis docv">
+        <div class="q">When does my lease renew?</div>
+        <div class="a"><p>On <b>1 March 2027</b> — automatically, unless you give 60 days' notice.</p>
+          <span class="cite">📄 Lease 2026.pdf · page 2</span></div>
+      </div>
+      <h3>Answers from your own documents</h3>
+      <p>PDFs, Word files — even photographed receipts. It quotes the passage and cites the file and page. All on your Mac.</p>
+    </article>
+    <article class="wcard reveal">
+      <div class="wvis invv">
+        <div class="accts"><span class="g">Work · Google</span><span class="g">Personal · Google</span><span>iCloud</span></div>
+        <div class="inv"><b>Launch sync</b><small>Fri · 3:00 PM · Priya, Sam</small>
+          <div class="inv-row"><span class="meet">＋ Google Meet</span><span class="save">Save</span></div></div>
+      </div>
+      <h3>Every calendar, real invites</h3>
+      <p>All your accounts — several Google accounts too. Invites open in Google Calendar or Outlook, filled in; you click Save.</p>
+    </article>
+    <article class="wcard reveal">
+      <div class="wvis todayv">
+        <div class="mnotch"><span class="mn-l">📹 Standup</span><span class="mn-notch"></span><span class="mn-r" id="todayCount">4m</span></div>
+        <div class="strip"><span class="dot"></span><div><b>Design review</b><small>11:00 · in 2h 10m · 2 more events today</small></div><span class="join">Join</span></div>
+      </div>
+      <h3>Today, at a glance</h3>
+      <p>Your next meeting with a Join button, and a countdown in the notch in its last fifteen minutes.</p>
+    </article>
+    <article class="wcard reveal">
+      <div class="wvis notesv">
+        <div class="nt"><small>NOTES · ZOOM CALL · 24 MIN</small><b>Launch moves to May.</b>
+          <ul><li>Me — send the deck — Friday</li><li>Priya — book the venue</li></ul></div>
+        <div class="asks"><span>Draft a follow-up email</span><span>Remind me of my action items</span></div>
+      </div>
+      <h3>Meeting notes that end in action</h3>
+      <p>Transcribed on your Mac, no bot joins the call. Then one tap drafts the follow-up or adds your to-dos.</p>
+    </article>
+    <article class="wcard reveal">
+      <div class="wvis progv">
+        <div class="pg" id="progCard">
+          <header><i class="spark"></i><span id="progHead">Checking the calendar</span><em id="progTime">3 s</em></header>
+          <ol id="progList">
+            <li class="done">Found a contact <span>Priya · 120 ms</span></li>
+            <li class="done">Found a contact <span>Sam · 140 ms</span></li>
+            <li class="doing">Checking the calendar <span>Friday</span></li>
+          </ol>
+        </div>
+      </div>
+      <h3>See it work, step by step</h3>
+      <p>No more “Working…”. Plain words for what it's doing, each step ticked off with its time, and failures shown honestly.</p>
+    </article>
+  </div>
+  <div class="inline-cta reveal"><a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Download OpenNotch — free</a><span class="micro">Free · macOS 14+ · <span data-size>4.6 MB</span></span></div>
+</section>
+
+<!-- ───────── Reaches out first ───────── -->
+<section class="section reach" id="reach" data-ear="reach">
+  <div class="split-copy reveal">
+    <p class="kicker">Proactive</p>
+    <h2>It taps you <em>on the shoulder.</em></h2>
+    <p class="lede">Most assistants wait to be asked. OpenNotch notices what matters and offers to help — one polite drop-down, one click.</p>
+    <ul class="checks">
+      <li>Two meetings overlap tomorrow → it offers to sort it out</li>
+      <li>Reminders went overdue → pick new times</li>
+      <li>You just downloaded a PDF → get the gist</li>
+      <li>A friend's birthday → a warm message, ready to send</li>
+      <li>Never during calls, videos or quiet hours — and it learns what you ignore</li>
+    </ul>
+  </div>
+  <div class="reach-stage reveal" aria-hidden="true">
+    <div class="rs-notch"><canvas class="mini-puff" data-mood="happy"></canvas></div>
+    <div class="toast" id="toast"><span class="t-ic" id="toastIc">📅</span><div><b id="toastT">Two meetings overlap at 3 PM tomorrow</b><small id="toastD">Design review · Coffee with Sam</small></div><span class="t-btn" id="toastB">Sort it out</span></div>
+  </div>
+</section>
+
+<!-- ───────── Why not just Siri? ───────── -->
+<section class="section" id="compare" data-ear="compare">
+  <header class="sec-head reveal">
+    <p class="kicker">Why switch</p>
+    <h2>Why not just <em>Siri?</em></h2>
+    <p>Siri is great for timers and texts. A chatbot is great in a window. OpenNotch is the one that does the work on your Mac — and tells you first.</p>
+  </header>
+  <div class="cmp reveal" role="table" aria-label="OpenNotch compared with Siri and chatbot apps">
+    <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader" class="us">OpenNotch</span><span role="columnheader">Siri</span><span role="columnheader">Chatbot apps</span></div>
+    <div class="cmp-row" role="row"><span role="rowheader">Does multi-step work across Mail, Calendar, files &amp; documents</span><span class="y us">Yes, with approvals</span><span class="p">Single actions</span><span class="p">Mostly in its window</span></div>
+    <div class="cmp-row" role="row"><span role="rowheader">Reaches out first — clashes, deadlines, new downloads</span><span class="y us">Yes</span><span class="p">Some suggestions</span><span class="n">No</span></div>
+    <div class="cmp-row" role="row"><span role="rowheader">Shows every step it took</span><span class="y us">Full timeline</span><span class="n">No</span><span class="p">Some</span></div>
+    <div class="cmp-row" role="row"><span role="rowheader">Your choice of AI — cloud, local or on-device</span><span class="y us">Any</span><span class="n">Apple's</span><span class="n">Their own</span></div>
+    <div class="cmp-row" role="row"><span role="rowheader">Answers from your own documents, with citations</span><span class="y us">Yes, on your Mac</span><span class="p">Limited</span><span class="p">If you upload them</span></div>
+    <div class="cmp-row" role="row"><span role="rowheader">Free &amp; open source</span><span class="y us">MIT</span><span class="p">Built in, closed</span><span class="p">Freemium, closed</span></div>
+  </div>
+  <div class="inline-cta reveal"><a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Download OpenNotch — free</a><span class="micro">Free · macOS 14+ · <span data-size>4.6 MB</span></span></div>
 </section>
 
 <!-- ───────── Manifesto (lights up as you scroll) ───────── -->
@@ -147,7 +271,7 @@
   <header class="sec-head reveal">
     <p class="kicker">The assistant</p>
     <h2>Ask once. <em>Watch it work.</em></h2>
-    <p>Forty-plus built-in tools — files, shell, web, Mail, Notes, calendar, reminders, contacts, weather — driven by whichever AI you choose.</p>
+    <p>Fifty-plus built-in tools — files, shell, web, Mail, Notes, every calendar account, reminders, contacts, your documents, Photos, weather — driven by whichever AI you choose.</p>
   </header>
 
   <div class="dock-wrap reveal">
@@ -218,6 +342,24 @@
       <p>Pipe anything into the notch with the <code>opennotch</code> CLI.</p>
     </article>
   </div>
+</section>
+
+<!-- ───────── Transparency: the Developer view ───────── -->
+<section class="section" id="trace" data-ear="trace">
+  <header class="sec-head reveal">
+    <p class="kicker">Transparency</p>
+    <h2>See <em>every step.</em></h2>
+    <p>An agent that acts on your Mac should show its work. Open ⋯ › Developer and every task is a timeline: which model, which tools, what they returned, how long each took — and what was waiting on you.</p>
+  </header>
+  <figure class="devshot reveal">
+    <img src="assets/devtools.jpg" alt="The Developer view: a task's timeline with model passes, tool calls, an approval and plain-language insights" loading="lazy">
+  </figure>
+  <div class="trace-points">
+    <div class="reveal"><b>Swimlanes</b><span>You · Model · Tools, side by side — spot the slow part in a glance.</span></div>
+    <div class="reveal"><b>Plain-language insights</b><span>“The model took 6.5 s to start answering — a faster model would feel snappier.”</span></div>
+    <div class="reveal"><b>Stays on your Mac</b><span>Kept 14 days. Exports leave out your content and strip emails, paths and keys.</span></div>
+  </div>
+  <div class="inline-cta reveal"><a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Get it — see every step yourself</a><span class="micro">Free · macOS 14+ · <span data-size>4.6 MB</span></span></div>
 </section>
 
 <!-- ───────── Voice ───────── -->
@@ -322,7 +464,7 @@
       <li><i class="wl" data-l="openrouter"></i><b>Sign in with OpenRouter</b><span>One login for Claude, GPT, Gemini and free models — with your own spending limit.</span></li>
       <li><i class="wl" data-l="openai claude googlegemini groq"></i><b>Paste an API key</b><span>OpenAI, Anthropic, Google Gemini (free tier) or Groq. Kept in your Keychain.</span></li>
       <li><i class="wl" data-l="ollama lmstudio meta"></i><b>Ollama · LM Studio</b><span>A local model. Fully offline, free.</span></li>
-      <li><i class="wl" data-l="chip"></i><b>Apple on-device</b><span>macOS 26 with Apple Intelligence. No setup.</span></li>
+      <li><i class="wl" data-l="chip"></i><b>Apple on-device — the default</b><span>On Macs with Apple Intelligence it just works: free, private, offline. Upgrade any time.</span></li>
     </ul>
   </div>
 </section>
@@ -377,10 +519,17 @@
     <p class="kicker">Get it</p>
     <h2>Install in a minute.</h2>
   </header>
+  <div class="install-cta reveal">
+    <a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3v12m0 0l-5-5m5 5l5-5M5 19h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      Download OpenNotch <span class="btn-sub">v<span data-ver>0.1.6</span> · <span data-size>4.6 MB</span></span>
+    </a>
+    <p class="micro">Free · macOS 14+ · Apple silicon · updates itself</p>
+  </div>
   <div class="steps">
     <div class="step reveal"><span>1</span><b>Download</b><p>Grab <code>OpenNotch.dmg</code> from <a href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" target="_blank" rel="noopener">Releases</a> and drag it to Applications.</p></div>
     <div class="step reveal"><span>2</span><b>Open Anyway</b><p>Builds aren't notarised yet: System Settings › Privacy &amp; Security › <b>Open Anyway</b>. Once.</p></div>
-    <div class="step reveal"><span>3</span><b>Connect an AI</b><p>Settings › AI — sign in with OpenRouter, paste a key, or pick a local model.</p></div>
+    <div class="step reveal"><span>3</span><b>Start asking</b><p>With Apple Intelligence it works right away. Want a bigger brain? Settings › AI — sign in with OpenRouter, paste a key, or pick a local model.</p></div>
   </div>
   <div class="term reveal" id="term">
     <div class="code-bar"><i></i><i></i><i></i><span>zsh — build from source</span><button class="copy" data-copy="git clone https://github.com/Laxman824/OpenNotch && cd OpenNotch&#10;scripts/signing.sh&#10;scripts/build.sh --install --open">Copy</button></div>
@@ -391,9 +540,12 @@
 <!-- ───────── FAQ ───────── -->
 <section class="section faq" id="faq">
   <header class="sec-head reveal"><h2>Questions</h2></header>
+  <details class="reveal"><summary>Is it safe to install? Why “Open Anyway”?</summary><p>OpenNotch is open source — every line is on GitHub — and builds are signed with the same certificate every release. They aren't notarised by Apple yet (that needs a paid developer account), so macOS asks you to confirm once in System Settings › Privacy &amp; Security › Open Anyway. Anything risky the app does still waits for your OK.</p></details>
   <details class="reveal"><summary>Is it really free?</summary><p>Yes. OpenNotch is MIT-licensed and open source. You pay only for the AI you choose — or nothing, with a local model.</p></details>
-  <details class="reveal"><summary>Does it work on a Mac without a notch?</summary><p>Yes — it shows a virtual notch. It needs macOS 14 Sonoma or later; Liquid Glass and the Apple on-device model need macOS 26.</p></details>
-  <details class="reveal"><summary>Can it send emails or messages on its own?</summary><p>No. It drafts replies in Mail; nothing is ever sent. Commands, file changes, calendar edits and connector tools wait for your approval.</p></details>
+  <details class="reveal"><summary>Does it work on a Mac without a notch?</summary><p>Yes — it shows a virtual notch. It needs macOS 14 Sonoma or later; Liquid Glass and the Apple on-device model need macOS 26 (on macOS 27, newer Macs get Apple's bigger on-device model automatically).</p></details>
+  <details class="reveal"><summary>Can it send emails or messages on its own?</summary><p>No. It drafts replies in Mail, and it sends an email only when you ask — and you approve that exact email every time. It never sends messages. Commands, file changes, calendar edits and connector tools wait for your approval too.</p></details>
+  <details class="reveal"><summary>How is it different from Siri or a chatbot?</summary><p>Siri mostly answers and waits to be asked; a chatbot lives in a window. OpenNotch works across your Mac's apps — mail, calendar, files, documents — reaches out when something needs you, and shows every step it took. It's free, open source and works with any AI.</p></details>
+  <details class="reveal"><summary>Can I see what it actually did?</summary><p>Yes — ⋯ › Developer shows every task as a timeline: the model, each tool with what it sent and got back, approvals and timings. It stays on your Mac for 14 days.</p></details>
   <details class="reveal"><summary>Where is my data?</summary><p>In <code>~/Library/Application Support/OpenNotch</code> on your Mac, with keys in the Keychain. There's no account and no telemetry.</p></details>
   <details class="reveal"><summary>How do I add more tools?</summary><p>Add any MCP server to <code>mcp.json</code> (Settings › AI › Edit mcp.json). Its tools appear to the assistant automatically.</p></details>
 </section>
@@ -404,11 +556,18 @@
   <canvas id="finalPuff" class="final-puff" aria-hidden="true"></canvas>
   <h2 class="reveal">Give your notch <em>a job.</em></h2>
   <div class="cta reveal">
-    <a class="btn btn-primary" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" target="_blank" rel="noopener">Download for macOS</a>
+    <a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Download for macOS</a>
     <a class="btn btn-ghost" href="https://github.com/Laxman824/OpenNotch" target="_blank" rel="noopener">View on GitHub</a>
   </div>
+  <p class="micro reveal">Free forever · macOS 14+ · <span data-size>4.6 MB</span> · No account · Your data stays on your Mac</p>
 </section>
 </main>
+
+<div class="dlbar" id="dlbar" aria-hidden="true">
+  <canvas class="mini-puff" data-mood="happy"></canvas>
+  <div class="dlbar-copy"><b>OpenNotch <small>v<span data-ver>0.1.6</span></small></b><span>Free · macOS 14+ · <span data-size>4.6 MB</span></span></div>
+  <a class="btn btn-primary btn-sm dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener" tabindex="-1">Download</a>
+</div>
 
 <footer class="foot">
   <span>OpenNotch · MIT · Made by <a href="https://laxman824.github.io/" target="_blank" rel="noopener">@Laxman824</a></span>

@@ -6,6 +6,11 @@
   const c = cv.getContext("2d");
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const GLOW = [[92, 140, 255], [176, 102, 255], [255, 102, 171], [255, 158, 77]];
+  let DOT = "255,255,255";
+  const readDot = () => { DOT = getComputedStyle(document.documentElement).getPropertyValue("--dot").trim() || "255,255,255"; };
+  readDot();
+  new MutationObserver(readDot).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  matchMedia("(prefers-color-scheme: light)").addEventListener("change", readDot);
   let W = 0, H = 0, D = 1, GAP = 26, cols = 0, rows = 0;
   const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999 };
   const ripples = [];
@@ -63,7 +68,7 @@
         }
         if (col) {
           c.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${Math.min(1, a + ca)})`;
-        } else c.fillStyle = `rgba(255,255,255,${a})`;
+        } else c.fillStyle = `rgba(${DOT},${a})`;
         c.fillRect(x - s / 2, y - s / 2, s, s);
       }
     }
