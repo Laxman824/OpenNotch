@@ -268,6 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .replacingOccurrences(of: "∞", with: "Until you stop it")), for: 1.8)
         }
         adoptAppleIfReady(announce: false)                     // free + private out of the box, where possible
+        TraceStore.shared.prune()                              // task traces older than 14 days
         TodayModel.shared.calendar = hub.calendar
         Reachout.shared.hub = hub
         Reachout.shared.backend = backend
@@ -561,6 +562,14 @@ struct OpenNotchMain {
         if let i = CommandLine.arguments.firstIndex(of: "--render-looks") {
             let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "looks.png"
             exit(MainActor.assumeIsolated { LookSheet.render(to: out) })
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-progress") {
+            let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "progress.png"
+            exit(MainActor.assumeIsolated { ProgressSheet.render(to: out) })
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-developer") {
+            let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "developer.png"
+            exit(MainActor.assumeIsolated { DeveloperSheet.render(to: out, overview: CommandLine.arguments.contains("overview")) })
         }
         if let i = CommandLine.arguments.firstIndex(of: "--render-ears") {
             let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "ears.png"

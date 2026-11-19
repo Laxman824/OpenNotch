@@ -135,6 +135,9 @@ struct FeedbackView: View {
     @State private var note = ""
     @State private var includeInfo = true
     @State private var copied = false
+    @State private var attachTrace = false
+    private var lastTrace: TurnRecord? { TraceStore.shared.recent.first }
+    private var traceBlock: String? { attachTrace ? lastTrace.map { "\n\n" + TraceLogic.reportText($0) } : nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -158,6 +161,13 @@ struct FeedbackView: View {
             if includeInfo {
                 Text(Feedback.infoLine).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)
             }
+            if lastTrace != nil {
+                Toggle(isOn: $attachTrace) {
+                    Text("Attach what my last task did — steps, tools, timings; no prompts, results or personal data")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                .toggleStyle(.checkbox)
+            }
             HStack {
                 if good == true {
                     Button("⭐ Star on GitHub") { NSWorkspace.shared.open(URL(string: FeedbackLogic.repo)!) }
@@ -167,12 +177,12 @@ struct FeedbackView: View {
                     let pb = NSPasteboard.general
                     pb.clearContents()
                     pb.setString(FeedbackLogic.title(good: good ?? true, note: note) + "\n\n"
-                                 + FeedbackLogic.body(good: good ?? true, note: note, info: includeInfo ? Feedback.infoLine : nil), forType: .string)
+                                 + FeedbackLogic.body(good: good ?? true, note: note, info: includeInfo ? Feedback.infoLine : nil) + (traceBlock ?? ""), forType: .string)
                     copied = true
                 }
                 .help("Copy it to send by email or anywhere you like")
                 Button("Send on GitHub") {
-                    if let u = FeedbackLogic.issueURL(good: good ?? true, note: note, info: includeInfo ? Feedback.infoLine : nil) {
+                    if let u = FeedbackLogic.issueURL(good: good ?? true, note: note + (traceBlock ?? ""), info: includeInfo ? Feedback.infoLine : nil) {
                         NSWorkspace.shared.open(u)
                     }
                     close()

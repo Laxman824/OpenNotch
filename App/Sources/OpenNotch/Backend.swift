@@ -24,6 +24,8 @@ struct Item: Identifiable, Equatable {
     var meta: String? = nil          // "3.2s" under an answer
     var details: String? = nil       // tool rows: what was sent / what came back
     var started: Date? = nil         // thinking rows: when it began
+    var turn: String? = nil          // tool rows: the trace this step belongs to (Developer view)
+    var ended: Date? = nil           // tool rows: when it finished (with `started`: the live checklist's times)
 }
 
 extension Item {
@@ -503,11 +505,16 @@ final class Backend: ObservableObject {
             var details = ""
             if let a = ev["args"] as? String, !a.isEmpty { details += a }
             if let r = ev["result"] as? String, !r.isEmpty { details += (details.isEmpty ? "" : "\n───\n") + r }
+            let turn = (ev["turn"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             if let i = items.firstIndex(where: { $0.id == id }) {
                 items[i].kind = kind
                 if !details.isEmpty { items[i].details = details }
+                if items[i].turn == nil { items[i].turn = turn }
+                if state != "running" && items[i].ended == nil { items[i].ended = Date() }
             } else {
-                items.append(Item(id: id, kind: kind, text: "", details: details.isEmpty ? nil : details))
+                var it = Item(id: id, kind: kind, text: "", details: details.isEmpty ? nil : details, started: Date(), turn: turn)
+                if state != "running" { it.ended = it.started }
+                items.append(it)
             }
             lastTool = state == "running" ? verb : ""
             if state == "running" { onToolStarted?(verb.isEmpty ? (ev["detail"] as? String ?? "") : verb) }

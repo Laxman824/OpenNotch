@@ -312,6 +312,7 @@ struct AppMenu: View {
     var body: some View {
         Button("Settings…") { SettingsWindow.shared.show() }
         Button("Send Feedback…") { FeedbackWindow.shared.show(good: nil) }
+        Button("Developer — task traces…") { DeveloperWindow.shared.show() }
         if let app = MeetingNotes.shared.recordingApp {
             Button("Stop taking notes (\(app))") { MeetingNotes.shared.stop() }
         } else {
@@ -1121,6 +1122,20 @@ struct Transcript: View {
     /// Keeps the empty state a moment after the first message so Puff can hand off (spring out).
     @State private var handoff = false
 
+    /// This turn's tool and thinking rows (after the last message you sent), while it runs.
+    private var liveSteps: [Item] {
+        guard backend.busy else { return [] }
+        let lastUser = backend.items.lastIndex { if case .user = $0.kind { return true }; return false } ?? -1
+        return backend.items[(lastUser + 1)...].filter(StepGroup.isStep)
+    }
+
+    /// The live card shows while working, until the answer itself starts streaming.
+    private var showsLiveCard: Bool {
+        guard backend.busy, let last = backend.items.last else { return backend.busy }
+        if case .assistant = last.kind, last.streaming { return false }
+        return true
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -1134,11 +1149,16 @@ struct Transcript: View {
                             .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Theme.secondary).frame(maxWidth: .infinity)
                     }
+                    let live = liveSteps
+                    let liveIDs = Set(live.map(\.id))
                     ForEach(StepGroup.segments(Array(backend.items.suffix(shown)), live: backend.busy)) { seg in
-                        if seg.items.count == 1 { ItemRow(item: seg.items[0]) } else { StepsRow(group: seg) }
+                        // While the live card shows this turn's steps, don't draw them twice.
+                        if showsLiveCard && seg.items.allSatisfy({ liveIDs.contains($0.id) }) {
+                            EmptyView()
+                        } else if seg.items.count == 1 { ItemRow(item: seg.items[0]) } else { StepsRow(group: seg) }
                     }
-                    if backend.busy, !(backend.items.last?.streaming ?? false) {
-                        WorkingRow(backend: backend, started: backend.turnStarted, tool: backend.lastTool)
+                    if showsLiveCard {
+                        LiveProgressCard(backend: backend, steps: live)
                     }
                     if !backend.busy, !backend.followUps.isEmpty, backend.items.last?.kind == .assistant {
                         FollowUpChips(items: backend.followUps) { backend.send($0) }
@@ -1241,6 +1261,9 @@ struct StepsRow: View {
                 .font(.system(size: 11)).foregroundStyle(Theme.tertiary)
                 .lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
+            Button("Details") { DeveloperWindow.shared.show(turn: group.items.compactMap(\.turn).last ?? TraceStore.shared.recent.first?.id) }
+                .buttonStyle(.plain).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.tertiary)
+                .help("See exactly what happened, step by step (Developer view)")
             Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
                 .foregroundStyle(Theme.tertiary).rotationEffect(.degrees(open ? 90 : 0))
         }
@@ -1363,28 +1386,6 @@ struct HoverLift: ButtonStyle {
     }
 }
 
-struct WorkingRow: View {
-    @ObservedObject var backend: Backend
-    let started: Date?
-    let tool: String
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
-            HStack(spacing: 8) {
-                AssistantFace(size: 22, backend: backend, tracksCursor: false)
-                Text(tool.isEmpty ? "Thinking" : tool)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Theme.secondary)
-                if let started {
-                    Text("\(Int(ctx.date.timeIntervalSince(started)))s")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(Theme.tertiary)
-                }
-            }
-        }
-    }
-}
-
 /// "nemotron-3-super-120b-a12b" → "nemotron-3-super" — the chip has ~110pt.
 func shortModel(_ m: String) -> String {
     let parts = m.split(separator: "-")
@@ -1401,6 +1402,12 @@ func shortModel(_ m: String) -> String {
 func toolSymbol(_ verb: String) -> String {
     let v = verb.lowercased()
     let table: [(String, String)] = [
+        // Specific first (a "Finding a contact" is about a person, not a search).
+        ("calendar", "calendar"), ("event", "calendar.badge.plus"), ("invite", "person.2.fill"), ("remind", "checklist"),
+        ("contact", "person.crop.circle"), ("weather", "cloud.sun"), ("photo", "photo.on.rectangle"), ("timer", "timer"),
+        ("music", "music.note"), ("shortcut", "square.2.layers.3d"), ("note", "note.text"), ("document", "doc.text.magnifyingglass"),
+        ("watch", "eye"), ("awake", "cup.and.saucer"), ("asked", "questionmark.bubble"), ("routine", "repeat"),
+        ("spotlight", "magnifyingglass"), ("checking the mac", "laptopcomputer"), ("opening", "arrow.up.forward.app"),
         ("read", "doc.text"), ("writ", "square.and.pencil"), ("edit", "pencil"), ("replac", "pencil"),
         ("delet", "trash"), ("mov", "arrow.right.doc.on.clipboard"), ("cop", "doc.on.doc"),
         ("search", "magnifyingglass"), ("find", "magnifyingglass"), ("grep", "magnifyingglass"),

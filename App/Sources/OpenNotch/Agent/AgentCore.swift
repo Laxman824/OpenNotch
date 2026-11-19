@@ -59,6 +59,11 @@ final class AgentCore {
             + MCPManager.shared.tools
     }
 
+    /// The running turn's trace (Developer view, bug reports).
+    private var rec = TurnRecorder() { didSet { if traces.live?.events.count != rec.record?.events.count { traces.live = rec.record } } }
+    /// Where finished turns go (checks use a temp store — rule 16).
+    var traces: TraceStore = .shared
+
     /// Evals: these tools (and every approval tool) report success without running.
     var pretendTools: Set<String> = []
     /// Found facts worth remembering (MemoryLearner) — the app turns them into a Save proposal.
@@ -119,10 +124,22 @@ final class AgentCore {
         let provider = self.provider
         let allTools = provider.supportsTools && provider.isConnected ? self.tools : []
         let connectors = MCPManager.shared.groups
+        rec.begin(prompt: conversation.last { $0.role == .user && $0.toolCallId == nil }?.text ?? "", chat: store?.currentID,
+                  provider: provider.name, model: provider.model)
         // A small model may add groups the keywords missed (Decider: Apple on-device or opt-in Jev; ≤ 1.5 s).
+        let decideStart = Date()
         var extraGroups: Set<String> = allTools.isEmpty ? [] : await Decider.groups(conversation: conversation, connectors: connectors)
         var tools = ToolRouter.select(allTools, conversation: conversation, connectors: connectors)
         var specs = tools.map(\.spec)
+        if !allTools.isEmpty {
+            let keyword = ToolRouter.keywordGroups(conversation, connectors: connectors)
+            if let engine = Decider.engine, DecisionLogic.shouldDecide(keywordGroups: keyword) {
+                rec.add(.decide, engine.rawValue, since: decideStart,
+                        detail: extraGroups.isEmpty ? "added nothing" : "added " + extraGroups.sorted().joined(separator: ", "))
+            }
+            rec.add(.route, "router", detail: (keyword.isEmpty ? "no keyword groups" : "groups " + keyword.sorted().joined(separator: ", "))
+                    + " · \(tools.count) of \(allTools.count) tools")
+        }
         var toolCalls = 0
         var repeats: [String: Int] = [:]
         var inTok = 0, outTok = 0
@@ -138,6 +155,7 @@ final class AgentCore {
             var raw: (String, String)?
             var filter = FollowUpFilter()
             let requestStart = Date()
+            var firstOut: Date?
             var passIn = 0, passOut = 0
             do {
                 for try await ev in provider.turn(system: systemPrompt(), messages: Self.window(conversation, summary: summary,
@@ -145,11 +163,12 @@ final class AgentCore {
                     if Task.isCancelled { break }
                     switch ev {
                     case .text(let d):
+                        if firstOut == nil { firstOut = Date() }
                         text += d
                         let shown = filter.feed(d)
                         if !shown.isEmpty { emit?(["type": "text", "delta": shown]) }
                     case .thinking(let d): emit?(["type": "thinking", "delta": d])
-                    case .toolCall(let c): calls.append(c)
+                    case .toolCall(let c): if firstOut == nil { firstOut = Date() }; calls.append(c)
                     case .usage(let i, let o): passIn = i; passOut = o
                     case .raw(let r, let src): raw = (r, src)
                     case .ranTool(let c, let ok, let result):
@@ -157,9 +176,10 @@ final class AgentCore {
                         let verb = self.tools.first { $0.name == c.name }?.verb ?? c.name
                         var e: [String: Any] = ["type": "tool", "id": "tool_" + c.id, "state": ok ? "done" : "error", "icon": "◆",
                                                 "verb": verb, "detail": "", "args": Self.prettyArgs(c.arguments),
-                                                "result": String(result.prefix(700))]
+                                                "result": String(result.prefix(700)), "turn": rec.record?.id ?? ""]
                         if !ok { e["error"] = String(result.prefix(160)) }
                         emit?(e)
+                        rec.add(.tool, c.name, ok: ok, detail: "run by the on-device model", args: Self.prettyArgs(c.arguments), result: result)
                     case .stop: break
                     }
                 }
@@ -172,12 +192,18 @@ final class AgentCore {
             followUps = suggested
             inTok += passIn; outTok += passOut
             Trace.llm(provider: provider.name, model: provider.model, start: requestStart, input: passIn, output: passOut)
+            rec.add(.llm, provider.model, since: requestStart, ok: failure == nil,
+                    detail: "in \(passIn) · out \(passOut)" + (firstOut.map { " · first output \(Int($0.timeIntervalSince(requestStart) * 1000)) ms" } ?? "")
+                        + (calls.isEmpty ? "" : " · \(calls.count) tool call\(calls.count == 1 ? "" : "s")")
+                        + (failure.map { " · " + String($0.prefix(140)) } ?? ""),
+                    first: firstOut.map { Int($0.timeIntervalSince(requestStart) * 1000) })
             if Task.isCancelled { stoppedBy = "stopped"; break }
             if failure != nil && text.isEmpty && calls.isEmpty {
                 // A glitch before anything streamed (malformed tool call, dropped connection):
                 // try this pass once more before giving up.
                 if !retried && !Self.isPermanent(failure!) {
                     retried = true
+                    rec.add(.retry, provider.model, ok: false, detail: String(failure!.prefix(200)))
                     failure = nil
                     emit?(["type": "info", "text": "Hiccup from the model — retrying…"])
                     continue
@@ -200,7 +226,7 @@ final class AgentCore {
             if ahead.count > 1 {
                 await withTaskGroup(of: (String, ToolOutcome).self) { group in
                     for (c, tool) in ahead {
-                        group.addTask { [weak self] in (c.id, await self?.execute(tool, c) ?? .fail("Stopped.")) }
+                        group.addTask { [weak self] in (c.id, await self?.execute(tool, c, parallel: true) ?? .fail("Stopped.")) }
                     }
                     for await (id, o) in group { prefetched[id] = o }
                 }
@@ -216,10 +242,12 @@ final class AgentCore {
                 if toolCalls > Self.maxToolCalls {
                     stoppedBy = "the \(Self.maxToolCalls)-tool limit for one message"
                     appendToolResult(call, ToolOutcome.fail("Tool budget for this turn is used up. Stop and summarise what you've done."))
+                    rec.add(.tool, call.name, ok: false, detail: "over the tool budget")
                     continue
                 }
                 if repeats[sig]! >= 3 {
                     outcome = .fail("You are repeating the same call with the same arguments. It won't give a different result — change approach or answer with what you have.")
+                    rec.add(.tool, call.name, ok: false, detail: "same call repeated 3 times — bounced", args: Self.prettyArgs(call.arguments))
                 } else if let done = prefetched.removeValue(forKey: call.id) {
                     outcome = done
                 } else if let tool = tools.first(where: { $0.name == call.name })
@@ -232,6 +260,7 @@ final class AgentCore {
                     }
                 } else {
                     outcome = .fail("There is no tool called \(call.name).")
+                    rec.add(.tool, call.name, ok: false, detail: "no such tool")
                 }
                 appendToolResult(call, outcome)
                 images += outcome.images
@@ -244,6 +273,9 @@ final class AgentCore {
 
         busy = false
         turn = nil
+        let end = failure.map { "error: " + String($0.prefix(160)) }
+            ?? (stoppedBy == "stopped" ? "stopped" : stoppedBy != nil ? "limit" : "completed")
+        if let r = rec.finish(end: end, inTokens: inTok, outTokens: outTok, toolCalls: toolCalls) { traces.append(r) }
         if let failure { emit?(["type": "error", "text": failure]) }
         if let stoppedBy { emit?(["type": "info", "text": "Stopped (\(stoppedBy))."]) }
         store?.save(conversation)
@@ -262,20 +294,31 @@ final class AgentCore {
     }
 
     /// Runs one tool: validates its JSON, asks for approval if needed, shows it in the transcript.
-    private func execute(_ tool: AgentTool, _ call: ToolCall) async -> ToolOutcome {
+    private func execute(_ tool: AgentTool, _ call: ToolCall, parallel: Bool = false) async -> ToolOutcome {
         guard HTTP.parse(call.arguments) != nil else {
+            rec.add(.tool, call.name, ok: false, detail: "invalid JSON arguments", args: String(call.arguments.prefix(400)))
             return .fail("INVALID_JSON: your arguments for \(call.name) weren't valid JSON. Send the call again with a complete JSON object.")
         }
         let args = ToolArgs(json: call.arguments)
         let rowID = "tool_" + call.id
         var event: [String: Any] = ["type": "tool", "id": rowID, "name": tool.name, "state": "running", "icon": "◆",
                                     "verb": tool.verb, "detail": tool.detail(args),
-                                    "args": Self.prettyArgs(call.arguments)]
+                                    "args": Self.prettyArgs(call.arguments), "turn": rec.record?.id ?? ""]
         if tool.name == "ask_user" && emit != nil {
-            return await askUser(args, row: event)
+            let asked = Date()
+            let o = await askUser(args, row: event)
+            rec.add(.question, "ask_user", since: asked, detail: args.str("question") ?? "", result: o.text)
+            return o
+        }
+        if tool.risk == .confirm && TurnPolicy.isAllowed(tool: tool.name, args: args.dict, allowed: allowedForChat) {
+            rec.add(.approval, tool.name, detail: "allowed for this chat (no prompt)")
         }
         if tool.risk == .confirm && !TurnPolicy.isAllowed(tool: tool.name, args: args.dict, allowed: allowedForChat) {
+            let asked = Date()
             let allowed = await askApproval(tool: tool, args: args)
+            let waited = Date().timeIntervalSince(asked)
+            rec.add(.approval, tool.name, since: asked, ok: allowed,
+                    detail: allowed ? "allowed" : waited >= Self.approvalTimeout - 1 ? "timed out (counts as no)" : "declined")
             guard allowed else {
                 event["state"] = "error"; event["error"] = "Not allowed"
                 emit?(event)
@@ -291,9 +334,13 @@ final class AgentCore {
         }
         let written = TurnFiles.tools.contains(tool.name) ? args.str("path").map(PathPolicy.resolve) : nil
         if let written { turnFiles.willWrite(written) }
+        let ran = Date()
         let raw = await Task.detached { await tool.run(args) }.value
         if let written, !raw.ok { turnFiles.failed(written) }
         var o = ResultBudget.apply(raw, tool: tool.name)
+        rec.add(.tool, tool.name, since: ran, ok: o.ok,
+                detail: (o.ok ? "" : String(o.text.prefix(160))) + (raw.text.count > 40_000 ? " · spilled to a file" : ""),
+                args: Self.prettyArgs(call.arguments), result: o.text, parallel: parallel)
         event["state"] = o.ok ? "done" : "error"
         if !o.ok { event["error"] = String(o.text.prefix(160)) }
         event["result"] = String(o.text.prefix(700)) + (o.text.count > 700 ? "…" : "")

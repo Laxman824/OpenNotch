@@ -1012,6 +1012,149 @@ enum AgentChecks {
     }
 
     /// run_script: real JavaScriptCore runs against fixture tools — results, limits, the sandbox.
+    /// A model that plays a fixed script: each pass yields the next list of events.
+    struct ScriptedProvider: ChatProvider {
+        let name = "Scripted"
+        let model = "scripted-1"
+        let isConnected = true
+        let supportsTools = false        // skips routing + the decider (its timeout needs the app's run loop)
+        let supportsImages = false
+        let passes: [[ProviderEvent]]
+        final class Counter: @unchecked Sendable { var n = 0 }
+        let counter = Counter()
+        func turn(system: String, messages: [ChatMessage], tools: [ToolSpec]) -> AsyncThrowingStream<ProviderEvent, Error> {
+            let i = counter.n
+            counter.n += 1
+            let evs = i < passes.count ? passes[i] : [.text("done")]
+            return AsyncThrowingStream { c in
+                for e in evs { c.yield(e) }
+                c.yield(.stop(reason: "end_turn"))
+                c.finish()
+            }
+        }
+    }
+
+    @MainActor private static func traces() async {
+        // Scrubbing: what must never leave the Mac.
+        let home = "/Users/alex"
+        let dirty = "mail alex.k@example.com read /Users/alex/Documents/lease.pdf with sk-ant-api03-abcdefghijklmnop and "
+            + "token=abcd1234efgh Bearer ya29.a0AfH6SMBxxxxxxxxxxxx and \(String(repeating: "Z", count: 48))"
+        let clean = TraceLogic.scrub(dirty, home: home)
+        check("trace scrub: emails (must-NOT leak)", !clean.contains("alex.k@example.com") && clean.contains("<email>"))
+        check("trace scrub: home path and user name (must-NOT leak)", !clean.contains("/Users/alex") && clean.contains("~/Documents/lease.pdf"))
+        check("trace scrub: keys and tokens (must-NOT leak)", !clean.contains("sk-ant-api03") && !clean.contains("abcd1234efgh")
+              && !clean.contains("ya29.a0") && !clean.contains(String(repeating: "Z", count: 48)))
+        check("trace scrub: ordinary text untouched", TraceLogic.scrub("weather in Paris · 3 events", home: home) == "weather in Paris · 3 events")
+
+        var r = TurnRecord(id: "t1", chat: "c1", started: Date(timeIntervalSince1970: 1_800_000_000), prompt: "email bob@x.com my lease",
+                           provider: "P", model: "m")
+        r.events = [TraceEvent(kind: .route, at: 0, name: "router", detail: "groups mail"),
+                    TraceEvent(kind: .llm, at: 5, ms: 900, name: "m", detail: "in 10 · out 5"),
+                    TraceEvent(kind: .tool, at: 910, ms: 300, name: "mail_draft", ok: true, detail: "", args: "to: bob@x.com", result: "Draft opened"),
+                    TraceEvent(kind: .approval, at: 905, ms: 4000, name: "mail_draft", ok: true, detail: "allowed"),
+                    TraceEvent(kind: .tool, at: 1300, ms: 50, name: "read_file", ok: false, detail: "No such file: /Users/alex/x", args: "path: ~/x")]
+        r.end = "completed"; r.ms = 6000
+        let plain = TraceLogic.redacted(r, content: false, home: home)
+        check("trace export: no content by default (must-NOT leak)", plain.prompt == "(24 characters)" && plain.events.allSatisfy { $0.args == nil && $0.result == nil }
+              && plain.chat == nil && !plain.events.contains { $0.kind == .tool && !$0.detail.isEmpty })
+        let full = TraceLogic.redacted(r, content: true, home: home)
+        check("trace export: content is still scrubbed", full.prompt == "email <email> my lease" && full.events[2].args == "to: <email>"
+              && full.events[4].detail == "No such file: ~/x")
+        check("trace: summary", TraceLogic.summary(r) == "1 step · 2 tools (1 failed) · 1 approval · 6.0 s · completed")
+        check("trace: problems flagged", r.hadProblem && !TurnRecord(id: "x", started: Date(), prompt: "", provider: "", model: "").hadProblem)
+        let b = TraceLogic.bar(r.events[1], total: 6000)
+        check("trace: timeline bar", abs(b.start - 5.0 / 6000) < 0.0001 && abs(b.width - 0.15) < 0.0001
+              && TraceLogic.bar(TraceEvent(kind: .info, at: 6000, ms: 999, name: ""), total: 6000).width <= 0.004 + 0.0001)
+        check("trace: prompt preview drops context and stamp", TraceLogic.promptPreview("hi there" + AgentCore.contextMarker + "\nSent: x\nfile") == "hi there")
+        check("trace: report text has no content (must-NOT leak)", !TraceLogic.reportText(r).contains("bob@x.com")
+              && !TraceLogic.reportText(r).contains("lease") && TraceLogic.reportText(r).contains("tool mail_draft"))
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        check("trace: expiry", TraceLogic.isExpired(TraceLogic.fileName(now.addingTimeInterval(-20 * 86_400)), now: now)
+              && !TraceLogic.isExpired(TraceLogic.fileName(now.addingTimeInterval(-3 * 86_400)), now: now)
+              && !TraceLogic.isExpired("2026-01-01.jsonl", now: now))
+        check("trace: read-back detected", TraceLogic.verified("Added “x” to Work on … (checked)."))
+
+        // Live progress card.
+        typealias PL = ProgressLogic
+        check("progress: phases", PL.phase(elapsed: 0.5, approval: false, question: false, running: [], hadTools: false, reasoningLive: false) == .starting
+              && PL.phase(elapsed: 3, approval: false, question: false, running: [], hadTools: false, reasoningLive: false) == .thinking
+              && PL.phase(elapsed: 3, approval: false, question: false, running: [], hadTools: false, reasoningLive: true) == .reasoning
+              && PL.phase(elapsed: 3, approval: false, question: false, running: ["Checking the calendar"], hadTools: true, reasoningLive: false) == .tool("Checking the calendar")
+              && PL.phase(elapsed: 3, approval: false, question: false, running: [], hadTools: true, reasoningLive: false) == .reading)
+        check("progress: waiting for you wins", PL.phase(elapsed: 9, approval: true, question: false, running: ["Adding an event"], hadTools: true, reasoningLive: true) == .approval
+              && PL.title(.approval) == "Waiting for your OK")
+        check("progress: parallel title", PL.title(.tool("Checking the weather"), running: 3) == "Checking the weather · and 2 more at once")
+        check("progress: past tense", PL.past("Checking the calendar") == "Checked the calendar" && PL.past("Searching the web") == "Searched the web"
+              && PL.past("Reading your screen") == "Read your screen" && PL.past("Adding a reminder") == "Added a reminder"
+              && PL.past("Fetching") == "Fetched" && PL.past("Making a shortcut") == "Made a shortcut"
+              && PL.past("Preparing an invite") == "Prepared an invite" && PL.past("Asked you") == "Asked you" && PL.past("Timer") == "Timer")
+        check("progress: reasoning tail", PL.tail("short thought") == "short thought"
+              && PL.tail(String(repeating: "word ", count: 60)).hasPrefix("…word") && PL.tail(String(repeating: "word ", count: 60)).count <= 112)
+        check("progress: specific tool icons", toolSymbol("Finding a contact") == "person.crop.circle" && toolSymbol("Checking the calendar") == "calendar"
+              && toolSymbol("Checking the weather") == "cloud.sun" && toolSymbol("Searching the web") == "magnifyingglass"
+              && toolSymbol("Reading a file") == "doc.text")
+        check("progress: slow hint only when slow", PL.slowHint(.thinking, elapsed: 5) == nil && PL.slowHint(.thinking, elapsed: 13) != nil
+              && PL.slowHint(.approval, elapsed: 120) == nil && PL.slowHint(.tool("x"), elapsed: 25) != nil)
+
+        // Developer view maths.
+        check("insights: union doesn't double-count parallel tools", TraceInsights.union([(0, 100), (50, 150), (300, 400)]) == 250
+              && TraceInsights.union([]) == 0)
+        let bd = TraceInsights.breakdown(r)
+        check("insights: time split", bd.model == 900 && bd.tools == 350 && bd.waiting == 4000 && bd.total == 6000)
+        let st = TraceInsights.steps(r)
+        check("insights: steps — setup, then a pass with what followed", st.map(\.title) == ["Setup", "Step 1"] && st[0].children == [0]
+              && st[1].header == 1 && st[1].children == [2, 3, 4])
+        check("insights: lanes", TraceInsights.lane(r.events[3]) == .you && TraceInsights.lane(r.events[1]) == .model
+              && TraceInsights.lane(r.events[2]) == .tools && TraceInsights.lane(r.events[0]) == nil)
+        let ins = TraceInsights.insights(r)
+        check("insights: worst first, at most 3", ins.count <= 3 && ins.first?.tone == .bad && ins.contains { $0.text.contains("read_file failed") })
+        var slow = TurnRecord(id: "s", started: Date(), prompt: "", provider: "", model: "m")
+        slow.events = [TraceEvent(kind: .llm, at: 0, ms: 9000, name: "m", first: 6500)]
+        slow.ms = 9000
+        check("insights: slow model start explained", TraceInsights.insights(slow).contains { $0.text.contains("6.5 s to start answering") })
+        var perm = slow
+        perm.events.append(TraceEvent(kind: .tool, at: 9000, ms: 20, name: "create_event", ok: false, detail: "Calendar access isn't allowed"))
+        check("insights: permission failures point to Settings", TraceInsights.insights(perm).first?.text.contains("Settings › Permissions") == true)
+        var quick = TurnRecord(id: "q", started: Date(), prompt: "", provider: "", model: "m")
+        quick.events = [TraceEvent(kind: .llm, at: 0, ms: 800, name: "m", first: 300)]; quick.ms = 800
+        check("insights: smooth turn says so", TraceInsights.insights(quick).first == TraceInsights.Insight(tone: .good, text: "Smooth — done in 0.8 s."))
+        check("insights: ticks", TraceInsights.ticks(total: 6000) == [0, 2000, 4000, 6000] && TraceInsights.ticks(total: 900) == [0, 200, 400, 600, 800]
+              && TraceInsights.ticks(total: 0) == [0])
+        check("insights: axis labels thin out when narrow", TraceInsights.labelTicks(total: 6000, width: 600) == [0, 2000, 4000, 6000]
+              && TraceInsights.labelTicks(total: 8000, width: 120) == [0, 4000, 8000]
+              && TraceInsights.labelTicks(total: 8000, width: 60).count <= 2)
+        let dayNow = Date(timeIntervalSince1970: 1_800_000_000)
+        check("insights: day labels", TraceInsights.dayLabel(dayNow, now: dayNow) == "Today"
+              && TraceInsights.dayLabel(dayNow.addingTimeInterval(-86_400), now: dayNow) == "Yesterday")
+        var o1 = r; o1.started = dayNow
+        var o2 = quick; o2.started = dayNow.addingTimeInterval(-86_400)
+        var o3 = quick; o3.started = dayNow.addingTimeInterval(-30 * 86_400)
+        let ov = TraceInsights.overview([o1, o2, o3], now: dayNow)
+        check("overview: last 7 days only", ov.tasks == 2 && ov.problems == 1 && abs(ov.okRate - 0.5) < 0.001 && ov.days.count == 7)
+        check("overview: failing tools first", ov.tools.first?.name == "read_file" && ov.tools.first?.failures == 1)
+        check("overview: medians", ov.medianMs == 3400 && ov.medianFirst == 300 && TraceInsights.median([5, 1, 3, 2]) == 2)
+
+        // A real turn through the loop, recorded into a temp store (never the user's traces).
+        let dir = NSTemporaryDirectory() + "opennotch-traces-\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let store = TraceStore(dir: dir)
+        let provider = ScriptedProvider(passes: [[.usage(input: 120, output: 8), .toolCall(ToolCall(id: "c1", name: "no_such_tool", arguments: "{}"))],
+                                                 [.text("All done."), .usage(input: 150, output: 4)]])
+        let core = AgentCore(ephemeral: provider)
+        core.traces = store
+        core.send("Do the thing", display: nil)
+        for _ in 0..<500 where store.recent.isEmpty { try? await Task.sleep(nanoseconds: 20_000_000) }
+        let t = store.recent.first
+        check("trace turn: recorded", t?.prompt == "Do the thing" && t?.end == "completed" && t?.model == "scripted-1")
+        check("trace turn: two model passes with tokens", t?.events.filter { $0.kind == .llm }.count == 2 && t?.inTokens == 270)
+        check("trace turn: failed tool step", t?.events.contains { $0.kind == .tool && $0.name == "no_such_tool" && !$0.ok && $0.detail == "no such tool" } == true)
+        check("trace turn: events in time order", t.map { zip($0.events, $0.events.dropFirst()).allSatisfy { $0.at <= $1.at } } == true)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        check("trace turn: written to the temp store only", files.count == 1 && files[0].hasPrefix("turns-"))
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+
     private static func scripts() async {
         let fake = AgentTool(name: "weather", description: "", schema: Schema.object(["city": Schema.string("")]),
                              risk: .read, verb: "", detail: { _ in "" }, preview: { _ in "" },
@@ -1274,6 +1417,7 @@ enum AgentChecks {
         await changedFiles()
         watchers()
         await scripts()
+        await traces()
 
         print(failed == 0 ? "agent: \(total)/\(total) pass" : "agent: \(failed) of \(total) FAILED")
         return failed == 0 ? 0 : 1
