@@ -46,7 +46,7 @@
   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
   <span>Star</span><b class="stars" id="starCount" hidden></b>
 </a>
-<span class="corner corner-l">v<span data-ver>0.1.6</span> · MIT</span>
+<span class="corner corner-l">v<span data-ver>0.1.7</span> · MIT</span>
 
 <main id="top">
 <!-- ───────── Hero: the page notch is the hero object ───────── -->
@@ -64,7 +64,7 @@
       </a>
       <a class="btn btn-ghost" href="#film">▶ Watch the film</a>
     </div>
-    <p class="micro reveal"><b>Free</b> · macOS 14+ · <span data-size>4.6 MB</span> · No account · <a data-rel href="https://github.com/Laxman824/OpenNotch/releases/latest" target="_blank" rel="noopener">v<span data-ver>0.1.6</span><span data-age></span> — what's new</a></p>
+    <p class="micro reveal"><b>Free</b> · macOS 14+ · <span data-size>4.7 MB</span> · No account · <a data-rel href="https://github.com/Laxman824/OpenNotch/releases/latest" target="_blank" rel="noopener">v<span data-ver>0.1.7</span><span data-age></span> — what's new</a></p>
     <p class="notmac" hidden>OpenNotch is a Mac app. <button type="button" class="linkbtn" data-copylink>Copy the link</button> and open it on your MacBook.</p>
     <ul class="trust reveal" aria-label="Why people trust it">
       <li><b>Open source</b> · MIT</li>
@@ -97,10 +97,77 @@
   <div class="stat reveal"><b data-count="0">0</b><span>accounts &amp; telemetry</span></div>
 </section>
 
-<!-- ───────── New in 0.1.6 ───────── -->
+<!-- ───────── New in 0.1.7 ───────── -->
 <section class="section" id="new" data-ear="new">
   <header class="sec-head reveal">
-    <p class="kicker">Just added</p>
+    <p class="kicker">New in 0.1.7</p>
+    <h2>Puff gets to work. <em>You stay in charge.</em></h2>
+    <p>See what it's doing even with the notch closed, get answers right where a tip pops up, stop approving the same safe things twice — and use the tables it gives you.</p>
+  </header>
+  <div class="wgrid">
+    <article class="wcard span2 reveal">
+      <div class="wvis workv">
+        <div class="wnotch" id="workNotch">
+          <div class="wn-l"><canvas class="wn-puff" id="workPuff" aria-hidden="true"></canvas><span class="wn-prop" id="workProp" aria-hidden="true"></span>
+            <span class="wn-dots" id="workDots" aria-hidden="true"><i></i><i></i><i></i></span><span class="wn-confetti" id="workConfetti" aria-hidden="true"></span></div>
+          <div class="wn-notch"></div>
+          <div class="wn-r" id="workText">Thinking…</div>
+        </div>
+        <div class="wn-legend" id="workLegend" aria-hidden="true"><span>thinking</span><span>searching</span><span>web</span><span>calendar</span><span>mail</span><span>music</span><span>done</span></div>
+      </div>
+      <h3>Puff works where you can see it</h3>
+      <p>With the notch closed, Puff acts out each job — a thought bubble, a magnifier, a spinning globe, a flipping calendar, envelopes flying in — with a few words beside it. Then a close-up and confetti when it's done.</p>
+    </article>
+    <article class="wcard reveal">
+      <div class="wvis tipv">
+        <div class="tip">
+          <div class="tip-h"><span class="tip-ic">✦</span><b>Summarise what you copied?</b><span class="tip-x">🔕 ✕</span></div>
+          <ul class="tip-a" id="tipAnswer"><li>Launch moves to <b>May 12</b></li><li>Budget stays the same</li><li>Priya owns the venue</li></ul>
+          <div class="tip-b"><span>Copy</span><span class="pri">Continue in chat</span></div>
+        </div>
+      </div>
+      <h3>Tips that finish where they start</h3>
+      <p>Summarise, Explain, Sort out a meeting clash, Plan my day — answered right in the drop-down, not a full window. “Not this kind again” on every tip.</p>
+    </article>
+    <article class="wcard reveal">
+      <div class="wvis allowv">
+        <div class="ap">
+          <div class="ap-h">✋ <span>Bolt wants to run</span> <b>run_command</b></div>
+          <code>git status</code>
+          <div class="ap-row"><div class="ap-links"><span>Allow git in this chat</span><span class="always" id="alwaysLink">Always allow “git status”</span></div>
+            <span class="deny">Deny</span><span class="ok">Approve</span></div>
+        </div>
+        <div class="ap-saved" id="apSaved">🛡️ Saved — won't ask again · <u>Settings › Permissions</u></div>
+      </div>
+      <h3>Always allow — safely</h3>
+      <p>Save a rule for this exact command, folder or tool. Sending email, deleting, sharing, posting and paying always ask. Read-only connector tools stop asking.</p>
+    </article>
+    <article class="wcard span2 reveal">
+      <div class="wvis tablev">
+        <div class="tb">
+          <div class="tb-bar"><span>▦ 4 rows · 4 columns</span><span class="tb-act"><i>Copy</i><i>CSV</i><i>Ask</i></span></div>
+          <table id="demoTable">
+            <thead><tr><th>Flight</th><th>Route</th><th class="num sorted" id="priceHead">Price <em id="sortArrow">▲</em></th><th class="num">Stops</th></tr></thead>
+            <tbody id="demoRows">
+              <tr><td>EK 501</td><td>Mumbai → London</td><td class="num">$455</td><td class="num">1</td></tr>
+              <tr><td>BA 256</td><td>Mumbai → London</td><td class="num">$598</td><td class="num">1</td></tr>
+              <tr><td>AI 101</td><td>Delhi → London</td><td class="num">$642</td><td class="num">0</td></tr>
+              <tr><td>LH 761</td><td>Delhi → Frankfurt</td><td class="num">$1,120</td><td class="num">0</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <h3>Tables you can actually use</h3>
+      <p>Click a column to sort. Copy straight into Numbers, Excel or Sheets, save as CSV, or ask a follow-up about the table.</p>
+    </article>
+  </div>
+  <div class="inline-cta reveal"><a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Download OpenNotch 0.1.7 — free</a><span class="micro">Free · macOS 14+ · <span data-size>4.7 MB</span> · updates itself</span></div>
+</section>
+
+<!-- ───────── New in 0.1.6 ───────── -->
+<section class="section" id="new16" data-ear="new16">
+  <header class="sec-head reveal">
+    <p class="kicker">Also recent · 0.1.6</p>
     <h2>Less asking. <em>More doing.</em></h2>
     <p>Ask about anything on your screen, get answers from your own documents, invite people across every calendar — and watch each step as it happens.</p>
   </header>
@@ -165,7 +232,6 @@
       <p>No more “Working…”. Plain words for what it's doing, each step ticked off with its time, and failures shown honestly.</p>
     </article>
   </div>
-  <div class="inline-cta reveal"><a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Download OpenNotch — free</a><span class="micro">Free · macOS 14+ · <span data-size>4.6 MB</span></span></div>
 </section>
 
 <!-- ───────── Reaches out first ───────── -->
@@ -204,7 +270,7 @@
     <div class="cmp-row" role="row"><span role="rowheader">Answers from your own documents, with citations</span><span class="y us">Yes, on your Mac</span><span class="p">Limited</span><span class="p">If you upload them</span></div>
     <div class="cmp-row" role="row"><span role="rowheader">Free &amp; open source</span><span class="y us">MIT</span><span class="p">Built in, closed</span><span class="p">Freemium, closed</span></div>
   </div>
-  <div class="inline-cta reveal"><a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Download OpenNotch — free</a><span class="micro">Free · macOS 14+ · <span data-size>4.6 MB</span></span></div>
+  <div class="inline-cta reveal"><a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Download OpenNotch — free</a><span class="micro">Free · macOS 14+ · <span data-size>4.7 MB</span></span></div>
 </section>
 
 <!-- ───────── Manifesto (lights up as you scroll) ───────── -->
@@ -359,7 +425,7 @@
     <div class="reveal"><b>Plain-language insights</b><span>“The model took 6.5 s to start answering — a faster model would feel snappier.”</span></div>
     <div class="reveal"><b>Stays on your Mac</b><span>Kept 14 days. Exports leave out your content and strip emails, paths and keys.</span></div>
   </div>
-  <div class="inline-cta reveal"><a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Get it — see every step yourself</a><span class="micro">Free · macOS 14+ · <span data-size>4.6 MB</span></span></div>
+  <div class="inline-cta reveal"><a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Get it — see every step yourself</a><span class="micro">Free · macOS 14+ · <span data-size>4.7 MB</span></span></div>
 </section>
 
 <!-- ───────── Voice ───────── -->
@@ -522,7 +588,7 @@
   <div class="install-cta reveal">
     <a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3v12m0 0l-5-5m5 5l5-5M5 19h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
-      Download OpenNotch <span class="btn-sub">v<span data-ver>0.1.6</span> · <span data-size>4.6 MB</span></span>
+      Download OpenNotch <span class="btn-sub">v<span data-ver>0.1.7</span> · <span data-size>4.7 MB</span></span>
     </a>
     <p class="micro">Free · macOS 14+ · Apple silicon · updates itself</p>
   </div>
@@ -559,13 +625,13 @@
     <a class="btn btn-primary dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener">Download for macOS</a>
     <a class="btn btn-ghost" href="https://github.com/Laxman824/OpenNotch" target="_blank" rel="noopener">View on GitHub</a>
   </div>
-  <p class="micro reveal">Free forever · macOS 14+ · <span data-size>4.6 MB</span> · No account · Your data stays on your Mac</p>
+  <p class="micro reveal">Free forever · macOS 14+ · <span data-size>4.7 MB</span> · No account · Your data stays on your Mac</p>
 </section>
 </main>
 
 <div class="dlbar" id="dlbar" aria-hidden="true">
   <canvas class="mini-puff" data-mood="happy"></canvas>
-  <div class="dlbar-copy"><b>OpenNotch <small>v<span data-ver>0.1.6</span></small></b><span>Free · macOS 14+ · <span data-size>4.6 MB</span></span></div>
+  <div class="dlbar-copy"><b>OpenNotch <small>v<span data-ver>0.1.7</span></small></b><span>Free · macOS 14+ · <span data-size>4.7 MB</span></span></div>
   <a class="btn btn-primary btn-sm dl" href="https://github.com/Laxman824/OpenNotch/releases/latest/download/OpenNotch.dmg" rel="noopener" tabindex="-1">Download</a>
 </div>
 

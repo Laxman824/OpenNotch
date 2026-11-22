@@ -53,9 +53,10 @@ const SECTION_EARS = {
   ai: { mood: "thinking", html: () => `<div><small style="color:var(--g2)">MODEL</small>your choice</div>` },
   puff: { mood: "happy", html: () => `<div><small style="color:var(--g3)">THAT'S ME</small>poke me ↓</div>` },
   buddies: { mood: "happy", html: () => `<span class="ear-art"></span>${wave}` },
-  install: { mood: "idle", html: () => `<div><small style="color:var(--green)">FREE</small>v${window.onVersion || "0.1.6"} · MIT</div>` },
+  install: { mood: "idle", html: () => `<div><small style="color:var(--green)">FREE</small>v${window.onVersion || "0.1.7"} · MIT</div>` },
   compare: { mood: "happy", html: () => `<div><small style="color:var(--g1)">VS SIRI</small>does the work</div>` },
-  new: { mood: "happy", html: () => `<div><small style="color:var(--g2)">NEW</small>in 0.1.6</div>` },
+  new: { mood: "working", html: () => `<div><small style="color:var(--g2)">NEW</small>in 0.1.7</div>` },
+  new16: { mood: "happy", html: () => `<div><small style="color:var(--g2)">ALSO NEW</small>in 0.1.6</div>` },
   reach: { mood: "alert", html: () => `<div><small style="color:var(--g4)">HEADS UP</small>meeting clash</div>` },
   trace: { mood: "thinking", html: () => `<div><small style="color:var(--cyan)">TRACE</small>every step</div>` },
   final: { mood: "happy", html: () => `<div><small style="color:var(--g4)">READY</small>give it a job</div>` },
@@ -409,6 +410,79 @@ const whileVisible = (el, start) => {
     else if (!e.isIntersecting && stop) { stop(); stop = null; }
   }), { threshold: 0.25 }).observe(el);
 };
+
+// ── New in 0.1.7 ──
+// Puff at work in a closed notch: one scene per kind of job, then a close-up + confetti.
+(() => {
+  const notchEl = $("#workNotch"), canvas = $("#workPuff");
+  if (!notchEl || !canvas || !window.Puff) return;
+  let mood = "thinking";
+  window.Puff.mount(canvas, { scale: 0.9, moodFn: () => mood });
+  const prop = $("#workProp"), dots = $("#workDots"), text = $("#workText"), conf = $("#workConfetti");
+  const legend = $$("#workLegend span");
+  const scenes = [
+    { name: "thinking", mood: "thinking", words: "Pondering…", dots: true },
+    { name: "searching", mood: "working", words: "Spotlight search", prop: "🔍", cls: "scan" },
+    { name: "web", mood: "working", words: "Searching the web", prop: "🌐", cls: "spin" },
+    { name: "calendar", mood: "working", words: "Checking calendar", prop: "📅", cls: "flip" },
+    { name: "mail", mood: "working", words: "Checking mail", prop: "✉️", cls: "fly" },
+    { name: "music", mood: "happy", words: "Playing music", prop: "🎵", cls: "float" },
+    { name: "done", mood: "happy", words: "All done! ✨", done: true },
+  ];
+  const show = (i) => {
+    const sc = scenes[i];
+    mood = sc.mood;
+    legend.forEach((l) => l.classList.toggle("on", l.textContent === sc.name));
+    dots.classList.toggle("on", !!sc.dots);
+    prop.className = "wn-prop";
+    prop.textContent = sc.prop || "";
+    if (sc.prop) requestAnimationFrame(() => { prop.className = "wn-prop on " + sc.cls; });
+    text.classList.add("swap");
+    setTimeout(() => { text.textContent = sc.words; text.classList.remove("swap"); text.classList.toggle("done", !!sc.done); }, 220);
+    notchEl.classList.toggle("done", !!sc.done);
+    conf.textContent = "";
+    if (sc.done && !reduce) {
+      const colors = ["#ff66ab", "#ffd60a", "#5c8cff", "#b066ff", "#32d74b", "#ff9e4d"];
+      for (let k = 0; k < 18; k++) {
+        const b = document.createElement("b");
+        b.style.background = colors[k % colors.length];
+        const a = (Math.PI * (0.15 + 0.7 * Math.random()));
+        b.style.setProperty("--dx", `${Math.cos(a) * (30 + Math.random() * 30)}px`);
+        b.style.setProperty("--dy", `${-Math.sin(a) * (16 + Math.random() * 18) + 26}px`);
+        conf.appendChild(b);
+      }
+    }
+  };
+  show(0);
+  whileVisible(notchEl, () => {
+    let i = 0;
+    const t = setInterval(() => { i = (i + 1) % scenes.length; show(i); }, 2300);
+    return () => clearInterval(t);
+  });
+})();
+
+// "Always allow": the link gets clicked, the rule is saved.
+whileVisible($("#alwaysLink"), () => {
+  const link = $("#alwaysLink"), saved = $("#apSaved");
+  let on = false;
+  const t = setInterval(() => { on = !on; link.classList.toggle("hit", on); saved.classList.toggle("on", on); }, 2400);
+  return () => { clearInterval(t); link.classList.remove("hit"); saved.classList.remove("on"); };
+});
+
+// The table sorts itself by price, up and down, like a click on the header.
+whileVisible($("#demoTable"), () => {
+  const body = $("#demoRows"), arrow = $("#sortArrow");
+  const price = (tr) => Number(tr.children[2].textContent.replace(/[^0-9.]/g, ""));
+  let up = true;
+  const t = setInterval(() => {
+    up = !up;
+    arrow.textContent = up ? "▲" : "▼";
+    const rows = [...body.children].sort((a, b) => (up ? 1 : -1) * (price(a) - price(b)));
+    rows.forEach((r) => { r.style.opacity = "0"; });
+    setTimeout(() => { rows.forEach((r) => { body.appendChild(r); r.style.opacity = "1"; }); }, 260);
+  }, 2600);
+  return () => clearInterval(t);
+});
 
 // The notch countdown to the next meeting.
 whileVisible($("#todayCount"), () => {
