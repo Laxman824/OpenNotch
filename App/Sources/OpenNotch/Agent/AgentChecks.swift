@@ -268,6 +268,9 @@ enum AgentChecks {
         check("docs: best passage first, with its page", lp.first?.page == 2 && lp.first?.text.contains("1 March 2027") == true)
         check("docs: cite file and page", DocSearchLogic.format(file: "/x/Lease 2026.pdf", passages: Array(lp.prefix(1)))
               .hasPrefix("Lease 2026.pdf, page 2: “This lease renews"))
+        let flat = "RESIDENTIAL LEASE AGREEMENT\nTenant: A. Person\n1. TERM\nThis lease begins on 1 March 2026.\n2. RENEWAL\nThis lease renews automatically on 1 March 2027\nunless notice is given.\n3. PETS\nSmall pets are allowed."
+        let fp = DocSearchLogic.passages(pages: [flat], terms: ["lease", "renew"], paged: true, max: 1)
+        check("docs: PDFs without blank lines split at headings", fp.first?.text.hasPrefix("2. RENEWAL This lease renews") == true)
         check("docs: nothing matching → no passages", DocSearchLogic.passages(pages: ["Hello there, nothing here at all."], terms: ["lease"], paged: false).isEmpty)
         check("docs: results are fenced and parallel-safe", TurnPolicy.isExternal("search_documents") && TurnPolicy.parallelSafe.contains("search_documents"))
         check("router: 'my lease' loads document search", ToolRouter.keywordGroups([ChatMessage(role: .user, text: "when does my lease renew?")]).contains("find"))
@@ -409,8 +412,119 @@ enum AgentChecks {
               && StepGroup.segments(items, live: true)[1].live == false)
     }
 
+    private static func markdownTables() {
+        let md = "Here:\n\n| City | Temp | Note |\n|:-----|-----:|:---:|\n| Paris | 12° | **rain** |\n| Oslo | -3° |\n\nDone."
+        let b = parseMarkdown(md)
+        check("table: parsed between paragraphs", b.count == 3 && b.first == .paragraph("Here:") && b.last == .paragraph("Done."))
+        if case let .table(h, rows, al) = b.count == 3 ? b[1] : .rule {
+            check("table: header", h == ["City", "Temp", "Note"])
+            check("table: rows padded to header width", rows == [["Paris", "12°", "**rain**"], ["Oslo", "-3°", ""]])
+            check("table: alignment from separator", al == [.leading, .trailing, .center])
+        } else { check("table: is a table block", false) }
+        check("table: no outer pipes", parseMarkdown("a | b\n--- | ---\n1 | 2") == [.table(header: ["a", "b"], rows: [["1", "2"]], align: [.leading, .leading])])
+        check("table: escaped pipe stays in the cell", parseMarkdown("| x |\n|---|\n| a \\| b |")
+              == [.table(header: ["x"], rows: [["a | b"]], align: [.leading])])
+        // Must NOT: pipes in prose, a lone header without separator, a horizontal rule.
+        check("table must-not: prose with pipes", parseMarkdown("Use a | b for this\nand more") == [.paragraph("Use a | b for this\nand more")])
+        check("table must-not: rule stays a rule", parseMarkdown("text\n\n---\n\nmore") == [.paragraph("text"), .rule, .paragraph("more")])
+        // Interactive table: numeric sort, text sort, empties last, exports.
+        let rows = [["Paris", "$1,200"], ["Oslo", "$95"], ["Rome", ""], ["Bern", "$310"]]
+        check("table sort: numbers as numbers", TableLogic.sorted(rows, column: 1, ascending: true).map { $0[0] } == ["Oslo", "Bern", "Paris", "Rome"])
+        check("table sort: descending, empty still last", TableLogic.sorted(rows, column: 1, ascending: false).map { $0[0] } == ["Paris", "Bern", "Oslo", "Rome"])
+        check("table sort: text", TableLogic.sorted(rows, column: 0, ascending: true).map { $0[0] } == ["Bern", "Oslo", "Paris", "Rome"])
+        check("table number: units", TableLogic.number("45%") == 45 && TableLogic.number("-3°") == -3 && TableLogic.number("12 ms") == 12
+              && TableLogic.number("€9.50") == 9.5)
+        check("table number must-not: dates, words, versions", TableLogic.number("2026-11-22") == nil && TableLogic.number("Paris") == nil
+              && TableLogic.number("1.2.3") == nil)
+        check("table csv: quotes and formula guard", TableLogic.csv(["a", "b"], [["x, y", "=SUM(A1)"], ["say \"hi\"", "-4"]])
+              == "a,b\r\n\"x, y\",'=SUM(A1)\r\n\"say \"\"hi\"\"\",-4\r\n")
+        check("table tsv: plain cells", TableLogic.tsv(["A"], [["**bold**"]]) == "A\nbold")
+        check("table markdown: round-trips", parseMarkdown(TableLogic.markdown(["a", "b|c"], [["1", "2"]], [.leading, .trailing]))
+              == [.table(header: ["a", "b|c"], rows: [["1", "2"]], align: [.leading, .trailing])])
+        check("table must-not: inside code", parseMarkdown("```\n| a | b |\n|---|---|\n```") == [.code(lang: "", text: "| a | b |\n|---|---|")])
+    }
+
+    private static func approvalRules() {
+        let K = ApprovalLogic.kind
+        // Kinds by leading verb (and MCP destructiveHint) — never by what the call carries.
+        check("kind: mail_send sends", K("mail_send", false) == .send)
+        check("kind: mcp delete", K("mcp__linear__delete_comment", false) == .delete)
+        check("kind: camelCase delete", K("mcp__x__deletePage", false) == .delete)
+        check("kind: service-prefixed delete", K("mcp__notion__notion-delete-page", false) == .delete)
+        check("kind: send/share/post/pay", K("mcp__slack__send_message", false) == .send && K("mcp__drive__share_file", false) == .share
+              && K("mcp__x__publish_post", false) == .post && K("mcp__stripe__create_refund", false) == nil
+              && K("mcp__stripe__refund_charge", false) == .pay)
+        check("kind: destructiveHint asks as delete", K("mcp__x__update_labels", true) == .delete)
+        // Must NOT: a word that only names what it acts on.
+        check("kind must-not: reads and ordinary edits", [
+            "mcp__gmail__list_archived", "mcp__gmail__get_sent_messages", "mcp__x__mark_as_spam", "mcp__x__search_posts",
+            "mcp__x__unarchive_issue", "mcp__notion__notion-search", "create_event", "write_file", "run_command", "mail_draft",
+        ].allSatisfy { K($0, false) == nil })
+
+        let A = ApprovalLogic.alwaysKey
+        check("always: exact command", A("run_command", ["command": "swift   build"], nil) == "cmd:swift build")
+        check("always: read-only git", A("run_command", ["command": "git status"], nil) == "cmd:git status")
+        check("always: folder", A("write_file", ["path": PathPolicy.home + "/proj/a.txt"], nil) == "files:" + PathPolicy.home + "/proj")
+        check("always: a tool", A("create_event", ["title": "x"], nil) == "create_event")
+        // Must NOT be allowed forever.
+        check("always must-not: email, schedules, watchers, routines", ApprovalLogic.neverAlways.allSatisfy { A($0, [:], nil) == nil }
+              && A("mail_send", ["to": "a@b.co"], nil) == nil)
+        check("always must-not: any risky kind", A("mcp__x__delete_page", [:], .delete) == nil && A("mcp__x__send", [:], .send) == nil)
+        check("always must-not: git that changes", A("run_command", ["command": "git push"], nil) == nil
+              && A("run_command", ["command": "git reset --hard"], nil) == nil && A("run_command", ["command": "git branch -D main"], nil) == nil)
+        check("always must-not: sudo/ssh/open/rm/chains", ["sudo ls", "ssh host", "open -a Mail", "rm -rf x", "ls; rm x",
+                                                          "cat a | sh", "echo $(id)"].allSatisfy { A("run_command", ["command": $0], nil) == nil })
+        check("always must-not: all of home", A("write_file", ["path": PathPolicy.home + "/a.txt"], nil) == nil)
+
+        // Covers: same key or a subfolder; a different command or folder still asks.
+        let keys: Set<String> = ["cmd:git status", "files:" + PathPolicy.home + "/proj", "create_event"]
+        let C = { (t: String, a: [String: Any]) in ApprovalLogic.covers(keys, tool: t, args: a, kind: ApprovalLogic.kind(tool: t, destructive: false)) }
+        check("covers: same command", C("run_command", ["command": "git status"]))
+        check("covers: subfolder", C("edit_file", ["path": PathPolicy.home + "/proj/src/b.swift"]))
+        check("covers must-not: other command / sibling folder / other tool",
+              !C("run_command", ["command": "git status --porcelain"]) && !C("edit_file", ["path": PathPolicy.home + "/project2/x"])
+              && !C("create_reminder", ["title": "x"]) && !C("mail_send", ["to": "a@b.co"]))
+
+        // Store: temp file, add/remove, owner-only.
+        let path = NSTemporaryDirectory() + "approval-rules-\(UUID().uuidString).json"
+        let store = ApprovalRuleStore(path: path)
+        store.add("cmd:git status"); store.add("cmd:git status"); store.add("create_event")
+        check("rules: add once each", store.all().map(\.key) == ["cmd:git status", "create_event"])
+        store.remove("cmd:git status")
+        check("rules: remove", store.keys == ["create_event"])
+        let perms = (try? FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int) ?? 0
+        check("rules: file is owner-only", perms == 0o600)
+        try? FileManager.default.removeItem(atPath: path)
+
+        // MCP hints: only a signed-in connector's read-only tool skips the prompt.
+        let ro = MCPServer.ToolInfo(name: "search", description: "", schema: "{}", readOnly: true)
+        let rw = MCPServer.ToolInfo(name: "update", description: "", schema: "{}")
+        check("mcp: signed-in read-only runs", MCPServer.runsWithoutAsking(ro, oauth: true, autoApprove: []))
+        check("mcp must-not: hand-added server's read-only claim still asks", !MCPServer.runsWithoutAsking(ro, oauth: false, autoApprove: []))
+        check("mcp must-not: no hint still asks", !MCPServer.runsWithoutAsking(rw, oauth: true, autoApprove: []))
+        check("mcp: autoApprove still works", MCPServer.runsWithoutAsking(rw, oauth: false, autoApprove: ["update"]))
+    }
+
     private static func presence() {
         let C = PresenceLogic.classify
+        // Cards with buttons hold under the pointer and never hover-open the panel (the button was unreachable).
+        let sample = Nudge(kind: .conflict, icon: "calendar", title: "t", actionLabel: "Sort it out", action: .openChat)
+        check("alert: nudge has actions", NotchAlert.nudge(sample).hasActions)
+        check("alert: hydration has actions", NotchAlert.hydration.hasActions)
+        check("alert: info hover-opens", !NotchAlert.info(icon: "i", text: "t").hasActions)
+        check("alert: timer done hover-opens", !NotchAlert.timerDone("t").hasActions)
+        // Short nudge actions answer inside the card, with read-only tools only (nothing can change from a card).
+        let inPlacePool = ToolKit.all() + DailyTools.all()
+        let inPlaceKinds = Nudge.Kind.allCases.filter { PresenceLogic.inPlaceTools($0) != nil }
+        check("in place: tools exist and are read-only", inPlaceKinds.allSatisfy { k in
+            PresenceLogic.inPlaceTools(k)!.allSatisfy { n in inPlacePool.first { $0.name == n }?.risk == .read } })
+        check("in place: copies, conflicts, overdue, morning", Set(inPlaceKinds) == [.clipLink, .clipError, .clipCode, .clipLong,
+                                                                                  .conflict, .overdue, .morning])
+        // Must NOT: a file to read, a break, call notes, feedback or the inbox switch stay as they were.
+        check("in place: not downloads/break/notes/feedback/inbox", [.download, .stretch, .callNotes, .feedback, .inboxOffer,
+                                                                    .welcomeBack, .birthday].allSatisfy { PresenceLogic.inPlaceTools($0) == nil })
+        check("in place: card prompt forbids changes", PresenceLogic.inPlaceStyle.contains("don't change anything"))
+        check("mute: muted kind is skipped", PresenceLogic.isMuted(.clipLong, ["clipLong"]) && !PresenceLogic.isMuted(.clipError, ["clipLong"]))
         check("clip: link", C("https://swift.org/documentation/") == .clipLink)
         check("clip: python error", C("Traceback (most recent call last):\n  File \"x.py\", line 3\nValueError: bad") == .clipError)
         check("clip: js error", C("TypeError: Cannot read properties of undefined\n    at foo (app.js:12:5)") == .clipError)
@@ -1411,6 +1525,29 @@ enum AgentChecks {
         macTools()
         routines()
         presence()
+        approvalRules()
+        markdownTables()
+        let W = { (t: String, s: (done: Int, total: Int)?, e: TimeInterval) in WorkingLogic.line(lastTool: t, step: s, elapsed: e) }
+        check("working: thinking lines rotate every 3 s", W("", nil, 0) == "Thinking…" && W("", nil, 3.1) == "Pondering…")
+        check("working: slow lines after 20 s", WorkingLogic.slowLines.contains(W("", nil, 21)))
+        check("working: tool verb, shortened", W("Checking your calendar for tomorrow", nil, 0) == "Checking calendar…"
+              && W("Searching the web…", nil, 0) == "Searching the web")
+        check("working: plan step prefix", W("Reading file", (1, 4), 0) == "2/4 · Reading file" && W("", (0, 1), 0) == "Thinking…")
+        check("working: blank tool is thinking", WorkingLogic.activity(lastTool: "  ") == .thinking)
+        let S = { (t: String) in WorkingLogic.scene(lastTool: t, answering: false, finale: nil) }
+        check("scene: each kind of work", S("") == .thinking && S("Searching the web") == .web && S("Spotlight search") == .search
+              && S("Reading file") == .read && S("Writing file") == .write && S("Checking mail") == .mail
+              && S("Checking your calendar") == .calendar && S("Getting the weather") == .weather && S("Running command") == .command
+              && S("Remembering") == .memory && S("Finding contact") == .people && S("Something new") == .tool)
+        check("scene: answer streaming, endings", WorkingLogic.scene(lastTool: "", answering: true, finale: nil) == .answering
+              && WorkingLogic.scene(lastTool: "Reading file", answering: false, finale: .done) == .done
+              && WorkingLogic.scene(lastTool: "", answering: false, finale: .snag) == .snag)
+        check("scene must-not: 'weather' isn't web, 'calendar invite' isn't mail", S("Checking the weather forecast") == .weather
+              && S("Creating calendar invite") == .calendar)
+        check("scene: every look has a known clip", WorkingLogic.Scene.allCases.allSatisfy {
+            ["think", "busy", "read", "search", "dance", "wave", "idle"].contains(WorkingLogic.look($0).clip) })
+        check("working: endings' words", WorkingLogic.line(lastTool: "", step: nil, elapsed: 0, finale: .done) == "All done! ✨"
+              && WorkingLogic.line(lastTool: "", step: nil, elapsed: 0, answering: true) == "Writing it up…")
         uxPolish()
         decider()
         askUser()

@@ -86,6 +86,50 @@ enum PerchPose {
         return pose
     }
 
+    /// The AI is thinking (closed notch): a hand to the chin, eyes up and to the side, a slow sway.
+    /// Loops every 3 s (36 frames at 12 fps), so the cached clip repeats seamlessly.
+    static func thinking(t: Double) -> Pose {
+        var pose = Pose()
+        let w = 2 * Double.pi / 3
+        pose.limbs.armR = 1.15 + 0.08 * sin(t * w * 2)        // hand up at the chin, tapping gently
+        pose.limbs.armL = 0.3
+        pose.gaze = CGPoint(x: 0.55 + 0.15 * sin(t * w), y: -0.55)
+        pose.bob = CGFloat(0.015 + 0.015 * sin(t * w))
+        pose.mood = .thinking
+        return pose
+    }
+
+    /// Reading (closed notch): both hands up holding the page, eyes running along a line and back. 3-s loop.
+    static func reading(t: Double) -> Pose {
+        var pose = Pose()
+        let line = (t.truncatingRemainder(dividingBy: 1.0))            // one line a second
+        pose.limbs.armL = 0.95; pose.limbs.armR = 0.95
+        pose.gaze = CGPoint(x: -0.6 + 1.2 * line, y: 0.55)
+        pose.bob = CGFloat(0.01 + 0.01 * sin(t * 2 * .pi / 3))
+        pose.mood = .working
+        return pose
+    }
+
+    /// Searching (closed notch): one arm holding the magnifier out, peering side to side. 3-s loop.
+    static func searching(t: Double) -> Pose {
+        var pose = Pose()
+        let w = 2 * Double.pi / 3
+        pose.limbs.armR = 1.35 + 0.1 * sin(t * w)
+        pose.limbs.armL = 0.35
+        pose.gaze = CGPoint(x: 0.75 * sin(t * w), y: 0.15)
+        pose.bob = CGFloat(0.015 * abs(sin(t * w)))
+        pose.mood = .working
+        return pose
+    }
+
+    /// The AI is using a tool: busy hands, eyes down on the work, a little bounce.
+    static func busy(t: Double) -> Pose {
+        var pose = typing(t: t)
+        pose.bob = CGFloat(abs(sin(t * 11))) * 0.02
+        pose.mood = .working
+        return pose
+    }
+
     /// While music plays: a bouncy little dance (~2 beats a second).
     static func dance(t: Double) -> Pose {
         var pose = Pose()
@@ -226,7 +270,8 @@ final class PerchSprites {
     static func frames(_ clip: String) -> Int {
         switch clip {
         case "idle": return 48            // 4 s breathing loop
-        case "typing", "dance": return 12 // 1 s
+        case "typing", "dance", "busy": return 12 // 1 s
+        case "think", "read", "search": return 36   // 3 s
         case "sleep": return 16           // zzz drifting up, at 4 fps → 4 s
         case "watch", "hero": return 1
         default: return max(1, Int(((PerchAction(rawValue: clip)?.duration ?? 1) * fps).rounded()))
@@ -239,6 +284,10 @@ final class PerchSprites {
         let pose: PerchPose.Pose
         switch k.clip {
         case "typing": pose = PerchPose.typing(t: t)
+        case "think": pose = PerchPose.thinking(t: Double(k.frame) / Self.fps)
+        case "read": pose = PerchPose.reading(t: Double(k.frame) / Self.fps)
+        case "search": pose = PerchPose.searching(t: Double(k.frame) / Self.fps)
+        case "busy": pose = PerchPose.busy(t: t)
         case "dance": pose = PerchPose.dance(t: t)
         case "sleep": pose = PerchPose.asleep()
         case "watch": pose = PerchPose.watching()

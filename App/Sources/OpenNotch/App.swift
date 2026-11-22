@@ -79,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Desktop Ledge says it in his bubble; one voice, not two.
             if self.desktop.isActive { return }
             Chime.done()
-            self.notch.peek()
+            self.notch.showFinale(.done)          // Puff celebrates in the ears, then the answer peeks out
         }
         backend.onApproval = { [weak self] in
             guard let self else { return }
@@ -103,7 +103,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.notch.expand(pinned: true)
         }
         backend.onTextDelta = { [weak self] d in self?.handsFree.feed(d) }
-        backend.onTurnFinished = { [weak self] text, streamed in self?.handsFree.turnFinished(text, streamed: streamed) }
+        backend.onTurnFinished = { [weak self] text, streamed in
+            guard let self else { return }
+            self.handsFree.turnFinished(text, streamed: streamed)
+            // The closed notch acts out the ending: confetti, or a rain cloud if it failed just now.
+            let failed = self.backend.lastErrorAt.map { Date().timeIntervalSince($0) < 2 } ?? false
+            if failed, self.notch.mode != .expanded { self.notch.showFinale(.snag) }
+        }
         backend.onToolStarted = { [weak self] verb in self?.handsFree.toolStarted(verb) }
         startSlowTurnWatch()
         handsFree.onShow = { [weak self] in self?.hub.module = .chat; self?.notch.expand(pinned: true) }
@@ -330,11 +336,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 20) { MeetingNotes.shared.stop() }
                     return
                 }
-                if name == "busytest" {                                           // dev: the "AI working" look, no AI call
+                if name == "busytest" {                                           // dev: every "AI working" scene, no AI call
+                    let steps = ["", "Searching the web", "Fetching the page", "Reading file", "Writing file", "Checking mail",
+                                 "Checking your calendar", "Getting the weather", "Running command", "Remembering",
+                                 "Playing music", "Finding contact", "Taking screenshot"]
                     self.backend.busy = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.backend.busy = false }
+                    self.backend.turnStarted = Date()
+                    for (i, t) in steps.enumerated() {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 2.5) { self.backend.lastTool = t }
+                    }
+                    let end = Double(steps.count) * 2.5
+                    DispatchQueue.main.asyncAfter(deadline: .now() + end) { self.backend.lastTool = ""; self.backend.lastTextAt = Date() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + end + 0.6) { self.backend.lastTextAt = Date() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + end + 1.2) {
+                        self.backend.busy = false; self.backend.turnStarted = nil
+                        self.notch.showFinale(name == "snagtest" ? .snag : .done)
+                    }
                     return
                 }
+                if name == "snagtest" { self.notch.showFinale(.snag); return }     // dev: the "hit a snag" ending
+                if name == "donetest" { self.notch.showFinale(.done); return }     // dev: the "all done" ending
+                if name == "newchat" { self.backend.newChat(); self.hub.module = .chat; self.notch.expand(pinned: true); return }
+                if name == "developer" { DeveloperWindow.shared.show(); return }   // task traces
+                if name == "close" { self.notch.collapse(); return }
+                if name == "askscreen" { self.askAboutScreen(); return }          // same as ⌥⇧A
+                if name == "reachout" { Reachout.shared.scanNow(); return }      // run the reach-out check now
                 if name == "palette" {                                             // ⌘K
                     self.notch.expand(pinned: true, focus: true)
                     self.notch.showPalette = true
@@ -588,6 +614,23 @@ struct OpenNotchMain {
         }
         if CommandLine.arguments.contains("--probe-privacy") {          // dev: who's using mic / camera now
             print("mic:", PrivacyMonitor.micApps(), "camera:", PrivacyMonitor.cameraOn())
+            exit(0)
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-table") {     // dev: a chat answer with a table
+            let out = i + 1 < CommandLine.arguments.count ? CommandLine.arguments[i + 1] : "table.png"
+            MainActor.assumeIsolated {
+                let md = "Here are this week's flights:\n\n| Flight | From | To | Price | Stops |\n|:--|:--|:--|--:|:-:|\n"
+                    + "| AI 101 | Delhi | London | $642 | 0 |\n| BA 256 | Mumbai | London | $598 | 1 |\n"
+                    + "| EK 501 | Mumbai | Dubai → London, a long connection that wraps onto a second line | $455 | 1 |\n"
+                    + "| LH 761 | Delhi | Frankfurt | $1,120 | 0 |\n\nThe **BA 256** is the best value."
+                let view = MarkdownView(text: md).font(.system(size: 13)).foregroundStyle(.white.opacity(0.93))
+                    .environment(\.askAbout) { _ in }
+                    .padding(18).frame(width: 640).background(Color(white: 0.07)).environment(\.colorScheme, .dark)
+                let r = ImageRenderer(content: view)
+                r.scale = 2
+                if let img = r.nsImage, let t = img.tiffRepresentation, let rep = NSBitmapImageRep(data: t),
+                   let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: out)) }
+            }
             exit(0)
         }
         if let i = CommandLine.arguments.firstIndex(of: "--render-week") {      // dev: the shareable card, sample numbers

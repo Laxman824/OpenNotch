@@ -42,6 +42,8 @@ struct AgentTool: Sendable {
     let detail: @Sendable (ToolArgs) -> String         // short argument summary for the tool row
     let preview: @Sendable (ToolArgs) -> String        // what the Approve card shows
     let run: @Sendable (ToolArgs) async -> ToolOutcome
+    /// Its MCP server says it destroys something (`destructiveHint`): asks as a delete, never "Always allow".
+    var destructive = false
 
     var spec: ToolSpec { ToolSpec(name: name, description: description, schema: schema) }
 }

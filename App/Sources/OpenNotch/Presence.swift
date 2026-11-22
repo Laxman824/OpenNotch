@@ -13,7 +13,7 @@ enum Liveliness: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     static let pref = "presence.level"
     static var current: Liveliness {
-        UserDefaults.standard.string(forKey: pref).flatMap(Liveliness.init(rawValue:)) ?? .lively
+        UserDefaults.standard.string(forKey: pref).flatMap(Liveliness.init(rawValue:)) ?? .friendly     // lively offered help on every copy — too much as a default
     }
 
     var label: String {
@@ -122,6 +122,26 @@ enum PresenceLogic {
     }
     static func quietHours(_ hour: Int) -> Bool { hour >= 22 || hour < 7 }
 
+    /// Short jobs answer inside the card instead of opening the panel: the read-only tools each may use
+    /// (empty = none). nil = the action opens the chat (a file to read, multi-step work).
+    static func inPlaceTools(_ k: Nudge.Kind) -> Set<String>? {
+        switch k {
+        case .clipError, .clipCode, .clipLong: return []
+        case .clipLink: return ["fetch_url"]
+        case .conflict: return ["calendar_events"]
+        case .overdue: return ["reminders_list", "calendar_events"]
+        case .morning: return ["calendar_events", "reminders_list", "weather"]
+        default: return nil
+        }
+    }
+    /// What's added to an in-place prompt: the card is small and nothing can be changed from it.
+    static let inPlaceStyle = "\n\nAnswer in at most 120 words of plain text (short bullets are fine, no tables or headings). "
+        + "This is shown in a small card: don't change anything, don't ask questions and don't offer to do things — "
+        + "I can continue in the chat."
+    /// "Not this kind again": muted kinds are never offered (Settings › General resets them).
+    static let mutedKey = "presence.muted"
+    static func isMuted(_ k: Nudge.Kind, _ muted: [String]) -> Bool { muted.contains(k.rawValue) }
+
     /// Learning from what you do with each kind: "a" accepted, "d" dismissed, "i" ignored
     /// (closed on its own), newest last. Six in a row without an accept → that kind rests
     /// (until you accept one from the queue or a week passes — see `Presence`).
@@ -202,6 +222,16 @@ final class Presence: ObservableObject {
     private var waiting: [(nudge: Nudge, until: Date)] = []
     private var showing: Nudge?
     private static let outcomesKey = "presence.outcomes"
+
+    /// An answer being written inside the nudge card (`PresenceLogic.inPlaceTools`).
+    struct InPlace: Equatable {
+        enum Phase: Equatable { case working, done(String), failed(String) }
+        let nudge: Nudge
+        let prompt: String
+        var phase: Phase
+    }
+    @Published private(set) var inPlace: InPlace?
+    private var inPlaceGen = 0
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
@@ -319,7 +349,9 @@ final class Presence: ObservableObject {
               PresenceLogic.allowed(n.kind, level),
               PresenceLogic.wanted(outcomes(n.kind)),
               !PresenceLogic.quietHours(Calendar.current.component(.hour, from: now)),
-              dismissals[n.kind, default: 0] < 3 else { return false }
+              dismissals[n.kind, default: 0] < 3,
+              !PresenceLogic.isMuted(n.kind, UserDefaults.standard.stringArray(forKey: PresenceLogic.mutedKey) ?? [])
+        else { return false }
         // Watching, presenting, on a call, typing hard, away: keep it for the next break.
         // (The call-notes offer is the one thing that belongs *in* a call.)
         let callOffer = n.kind == .callNotes && Attention.shared.state == .inCall
@@ -341,6 +373,7 @@ final class Presence: ObservableObject {
         lastShown = now
         resolveShowing("i")
         showing = n
+        inPlace = nil
         let shownID = n.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
             if self?.showing?.id == shownID { self?.resolveShowing("i") }     // closed on its own
@@ -361,10 +394,14 @@ final class Presence: ObservableObject {
         case .clipLink, .clipLong: ValueLedger.shared.add(.summaries)
         default: break
         }
+        if case let .ask(prompt, clip) = n.action, let tools = PresenceLogic.inPlaceTools(n.kind) {
+            answerInPlace(n, prompt: prompt, clip: clip, tools: tools)
+            return
+        }
         switch n.action {
         case let .ask(prompt, clip):
             hub.module = .chat
-            notch.expand(pinned: true)
+            notch.expand(pinned: true, focus: true)
             if let clip { backend.attach(Attachment(kind: .clipboard, value: String(clip.prefix(20_000)))) }
             backend.send(prompt)
         case .startBreak(let minutes):
@@ -372,7 +409,7 @@ final class Presence: ObservableObject {
             notch.collapse()
         case .openChat:
             hub.module = .chat
-            notch.expand(pinned: true)
+            notch.expand(pinned: true, focus: true)
         case .startNotes(let app):
             notch.collapse()
             MeetingNotes.shared.start(app: app)
@@ -380,7 +417,7 @@ final class Presence: ObservableObject {
             answerFeedback(good: nil)
         case let .askFile(prompt, path):
             hub.module = .chat
-            notch.expand(pinned: true)
+            notch.expand(pinned: true, focus: true)
             backend.attach(Attachment(kind: .file, value: path))
             backend.send(prompt)
         case .enableInbox:
@@ -388,6 +425,68 @@ final class Presence: ObservableObject {
             notch.collapse()
             backend.info("I'll keep an eye on your inbox and tell you when a real person writes. Turn it off in the ⋯ menu › Proactive.")
         }
+    }
+
+    /// Write the answer inside the card; the notch holds it until you close it or leave it alone.
+    private func answerInPlace(_ n: Nudge, prompt: String, clip: String?, tools: Set<String>) {
+        guard let notch, let backend else { return }
+        inPlaceGen += 1
+        let gen = inPlaceGen
+        inPlace = InPlace(nudge: n, prompt: prompt, phase: .working)
+        notch.holdAlert(answering: true)
+        backend.answerInPlace(prompt + PresenceLogic.inPlaceStyle, clip: clip, tools: tools) { [weak self] r in
+            DispatchQueue.main.async {
+                guard let self, self.inPlaceGen == gen, self.inPlace?.nudge.id == n.id else { return }
+                switch r {
+                case .success(let t) where !t.isEmpty: self.inPlace?.phase = .done(t)
+                case .success: self.inPlace?.phase = .failed("No answer came back.")
+                case .failure(let e): self.inPlace?.phase = .failed(e)
+                }
+                self.notch?.holdAlert(answering: false)
+            }
+        }
+    }
+
+    /// Copy the in-place answer.
+    func copyAnswer() {
+        guard case .done(let t) = inPlace?.phase else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(t, forType: .string)
+    }
+
+    /// Carry the card's question and answer into the chat (no second AI call), ready for a follow-up.
+    func continueInChat() {
+        guard let p = inPlace, let notch, let backend, let hub else { return }
+        inPlaceGen += 1
+        inPlace = nil
+        hub.module = .chat
+        if case let .ask(_, clip) = p.nudge.action, let clip { backend.attach(Attachment(kind: .clipboard, value: String(clip.prefix(20_000)))) }
+        switch p.phase {
+        case .done(let answer):
+            backend.showLocalExchange(user: p.prompt, reply: answer)
+            notch.expand(pinned: true, focus: true)
+        case .working, .failed:
+            notch.expand(pinned: true, focus: true)
+            backend.send(p.prompt)
+        }
+    }
+
+    /// Close the card (and drop an answer still being written).
+    func closeAnswer() {
+        inPlaceGen += 1
+        inPlace = nil
+        notch?.collapse()
+    }
+
+    /// "Not this kind again".
+    func mute(_ n: Nudge) {
+        var m = UserDefaults.standard.stringArray(forKey: PresenceLogic.mutedKey) ?? []
+        if !m.contains(n.kind.rawValue) { m.append(n.kind.rawValue) }
+        UserDefaults.standard.set(m, forKey: PresenceLogic.mutedKey)
+        if showing?.id == n.id { showing = nil }
+        record(n.kind, "d")
+        inPlace = nil
+        notch?.collapse()
     }
 
     /// A thumb on the "How's it going?" card.
@@ -429,13 +528,27 @@ final class Presence: ObservableObject {
 
 // MARK: - View
 
-/// The drop-down: Ledge, what's up, one action, and "not now".
+/// The drop-down: Ledge, what's up, one action, "not this kind again" and "not now". Short actions answer right here
+/// (`Presence.inPlace`) with Copy · Continue in chat · close.
 struct NudgeView: View {
     let nudge: Nudge
     @ObservedObject var backend: Backend
+    @ObservedObject private var presence = Presence.shared
     @State private var bumps = 0
+    @State private var copied = false
+
+    private var answer: Presence.InPlace? { presence.inPlace?.nudge.id == nudge.id ? presence.inPlace : nil }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+            if let answer { answerBody(answer) }
+        }
+        .padding(.bottom, answer == nil ? 0 : 14)
+        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { bumps += 1 } }
+    }
+
+    private var header: some View {
         HStack(spacing: 12) {
             AssistantFace(size: 30, backend: backend, tracksCursor: false, greets: true)
             VStack(alignment: .leading, spacing: 2) {
@@ -450,7 +563,9 @@ struct NudgeView: View {
                 }
             }
             Spacer(minLength: 6)
-            if nudge.action == .feedback {
+            if answer != nil {
+                EmptyView()
+            } else if nudge.action == .feedback {
                 ForEach([true, false], id: \.self) { up in
                     Button { Presence.shared.answerFeedback(good: up) } label: {
                         Text(up ? "👍" : "👎").font(.system(size: 17))
@@ -464,14 +579,57 @@ struct NudgeView: View {
             } else {
                 PillButton(label: nudge.actionLabel, primary: true) { Presence.shared.act(nudge) }
                     .environment(\.moduleAccent, Module.chat.accent)
+                smallButton("bell.slash", help: "Not this kind again") { Presence.shared.mute(nudge) }
             }
-            Button { Presence.shared.dismiss(nudge) } label: {
-                Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.tertiary)
-                    .frame(width: 20, height: 20).contentShape(Circle())
+            smallButton("xmark", help: answer == nil ? "Not now" : "Close") {
+                if answer == nil { Presence.shared.dismiss(nudge) } else { Presence.shared.closeAnswer() }
             }
-            .buttonStyle(.plain)
-            .help("Not now")
         }
-        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { bumps += 1 } }
+    }
+
+    @ViewBuilder
+    private func answerBody(_ a: Presence.InPlace) -> some View {
+        switch a.phase {
+        case .working:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Working on it…").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        case .done(let text):
+            ScrollView {
+                Text(text).font(.system(size: 12.5)).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.automatic)
+            actions(primary: "Continue in chat", canCopy: true)
+        case .failed(let why):
+            Text(why).font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            actions(primary: "Try in chat", canCopy: false)
+        }
+    }
+
+    private func actions(primary: String, canCopy: Bool) -> some View {
+        HStack(spacing: 8) {
+            Spacer()
+            if canCopy {
+                PillButton(label: copied ? "Copied" : "Copy", icon: copied ? "checkmark" : "doc.on.doc") {
+                    Presence.shared.copyAnswer()
+                    copied = true
+                }
+            }
+            PillButton(label: primary, icon: "bubble.left.and.text.bubble.right", primary: true) { Presence.shared.continueInChat() }
+                .environment(\.moduleAccent, Module.chat.accent)
+        }
+    }
+
+    private func smallButton(_ symbol: String, help: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 9.5, weight: .bold)).foregroundStyle(Theme.tertiary)
+                .frame(width: 20, height: 20).contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 }

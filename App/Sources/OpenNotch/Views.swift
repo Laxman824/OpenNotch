@@ -458,6 +458,10 @@ struct CollapsedView: View {
                         }
                         .frame(width: notch.notchSize.width + 2 * ear, height: notch.notchSize.height)
                     }
+                case .agent where notch.showsWorkingPuff:
+                    WorkingPuff(backend: backend, finale: notch.finale).frame(width: ear, height: notch.notchSize.height)
+                    Spacer().frame(width: notch.notchSize.width)
+                    WorkingStatus(backend: backend, finale: notch.finale).frame(width: ear)
                 default:
                     left.frame(width: ear)
                     Spacer().frame(width: notch.notchSize.width)
@@ -1167,6 +1171,10 @@ struct Transcript: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
+                .environment(\.askAbout) { table in            // a table's "Ask": attach it and focus the composer
+                    backend.attach(Attachment(kind: .clipboard, value: table))
+                    Presence.shared.notch?.expand(pinned: true, focus: true)
+                }
             }
             .scrollIndicators(.never)
             .onChange(of: backend.items) { _ in
@@ -1553,6 +1561,12 @@ struct ApprovalCard: View {
                 Image(systemName: "hand.raised.fill").foregroundStyle(.yellow)
                 Text("\(Prefs.name) wants to run").foregroundStyle(Theme.secondary)
                 Text(approval.tool).foregroundStyle(.white).fontWeight(.bold)
+                if let kind = approval.kind {
+                    Text(kind).font(.system(size: 10, weight: .semibold)).foregroundStyle(.orange)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                        .help("Actions like this always ask — they can't be allowed forever")
+                }
             }
             .font(.system(size: 12))
             Text(approval.preview)
@@ -1564,13 +1578,23 @@ struct ApprovalCard: View {
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(0.35)))
             HStack(spacing: 8) {
-                if let label = approval.allowLabel {
-                    Button { backend.answer(approval, allow: true, forChat: true) } label: {
-                        Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary)
-                            .lineLimit(1).truncationMode(.middle)
+                VStack(alignment: .leading, spacing: 4) {
+                    if let label = approval.allowLabel {
+                        Button { backend.answer(approval, allow: true, forChat: true) } label: {
+                            Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Approve this, and don't ask again for calls like it until you start or open another chat")
                     }
-                    .buttonStyle(.plain)
-                    .help("Approve this, and don't ask again for calls like it until you start or open another chat")
+                    if let label = approval.alwaysLabel {
+                        Button { backend.answer(approval, allow: true, always: true) } label: {
+                            Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Approve this, and never ask again for exactly this — in any chat. Remove it in Settings › Permissions.")
+                    }
                 }
                 Spacer()
                 Button { backend.answer(approval, allow: false) } label: {

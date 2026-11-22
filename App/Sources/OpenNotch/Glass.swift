@@ -12,6 +12,8 @@ enum GlassStyle {
         guard #available(macOS 26.0, *) else { return false }
         return UserDefaults.standard.object(forKey: "appearance.glass") as? Bool ?? true
     }
+    /// Extra black over the glass while the panel isn't key (see `NotchSurface`).
+    static let inactiveShade = 0.55
 }
 
 /// The open notch's body: tinted glass, kept black along the top so it still
@@ -19,6 +21,9 @@ enum GlassStyle {
 struct NotchSurface: View {
     let radius: CGFloat
     let notchHeight: CGFloat
+    /// macOS draws glass in a lighter "inactive window" style while the panel isn't key — and the notch usually opens
+    /// on hover, without focus, so it looked light grey until clicked. Darken to match the key look.
+    @Environment(\.controlActiveState) private var activeState
 
     var body: some View {
         if #available(macOS 26.0, *), GlassStyle.enabled {
@@ -26,6 +31,8 @@ struct NotchSurface: View {
                 NotchShape(radius: radius)
                     .fill(Color.clear)
                     .glassEffect(Glass.regular.tint(.black.opacity(0.68)), in: NotchShape(radius: radius))
+                NotchShape(radius: radius)
+                    .fill(Color.black.opacity(activeState == .key ? 0 : GlassStyle.inactiveShade))
                 // Solid black for the notch's own height, then a short fade into the glass.
                 let fade: CGFloat = 34
                 Rectangle()

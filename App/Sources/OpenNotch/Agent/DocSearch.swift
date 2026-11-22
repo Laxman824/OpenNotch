@@ -64,8 +64,23 @@ enum DocSearchLogic {
     }
 
     /// Paragraphs, long ones cut into ~500-char pieces on sentence ends; whitespace tidied.
+    /// Paragraphs; text without blank lines (many PDFs) is split at numbered or ALL-CAPS headings instead.
+    static func sections(_ text: String) -> [String] {
+        let byBlank = text.components(separatedBy: "\n\n")
+        guard byBlank.count < 3 else { return byBlank }
+        var out: [String] = [], cur: [String] = []
+        for line in text.components(separatedBy: "\n") {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            let heading = t.range(of: #"^(\d{1,2}[.)]\s+\S|[A-Z][A-Z0-9 ,&'—-]{3,}$)"#, options: .regularExpression) != nil
+            if (heading || t.isEmpty), !cur.isEmpty { out.append(cur.joined(separator: " ")); cur = [] }
+            if !t.isEmpty { cur.append(t) }
+        }
+        if !cur.isEmpty { out.append(cur.joined(separator: " ")) }
+        return out
+    }
+
     static func chunks(_ text: String) -> [String] {
-        let paras = text.components(separatedBy: "\n\n").flatMap { p -> [String] in
+        let paras = sections(text).flatMap { p -> [String] in
             let t = p.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
             guard t.count > 600 else { return t.count >= 20 ? [t] : [] }
             var out: [String] = [], cur = ""

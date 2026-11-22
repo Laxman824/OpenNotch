@@ -34,7 +34,17 @@ final class MCPServer: @unchecked Sendable {
 
     var isRemote: Bool { if case .success(.http) = endpoint { return true } else { return false } }
 
-    struct ToolInfo { let name: String; let description: String; let schema: String }
+    struct ToolInfo {
+        let name: String; let description: String; let schema: String
+        var readOnly = false        // MCP annotations.readOnlyHint
+        var destructive = false     // MCP annotations.destructiveHint (only meaningful when not read-only)
+    }
+
+    /// A signed-in connector's tool the server marks read-only (and not destructive) runs without asking; any other
+    /// server's hints don't lift approval (a hand-added server could claim anything). `autoApprove` still works.
+    static func runsWithoutAsking(_ i: ToolInfo, oauth: Bool, autoApprove: Set<String>) -> Bool {
+        autoApprove.contains(i.name) || (oauth && i.readOnly && !i.destructive)
+    }
 
     func start() async throws -> [ToolInfo] {
         let t: MCPTransport
@@ -58,7 +68,10 @@ final class MCPServer: @unchecked Sendable {
             for tool in r["tools"] as? [[String: Any]] ?? [] {
                 guard let n = tool["name"] as? String else { continue }
                 let schema = tool["inputSchema"].flatMap { String(data: HTTP.json($0), encoding: .utf8) } ?? Schema.object([:])
-                tools.append(ToolInfo(name: n, description: tool["description"] as? String ?? "", schema: schema))
+                let ann = tool["annotations"] as? [String: Any] ?? [:]
+                let readOnly = ann["readOnlyHint"] as? Bool ?? false
+                tools.append(ToolInfo(name: n, description: tool["description"] as? String ?? "", schema: schema,
+                                      readOnly: readOnly, destructive: !readOnly && (ann["destructiveHint"] as? Bool ?? false)))
             }
             cursor = r["nextCursor"] as? String
         } while cursor != nil && tools.count < 500
@@ -136,14 +149,16 @@ final class MCPManager: ObservableObject {
                 servers.append(server)
                 for i in infos {
                     let wire = Self.wireName(server: name, tool: i.name)
-                    let auto = server.autoApprove.contains(i.name)
+                    let auto = MCPServer.runsWithoutAsking(i, oauth: server.usesOAuth, autoApprove: server.autoApprove)
                     let toolName = i.name
-                    tools.append(AgentTool(
+                    var made = AgentTool(
                         name: wire, description: "[\(name)] " + String(i.description.prefix(900)), schema: i.schema,
                         risk: auto ? .read : .confirm, verb: "\(name): \(toolName)",
                         detail: { _ in "" },
                         preview: { a in "\(name) › \(toolName)\n" + (String(data: HTTP.json(a.dict), encoding: .utf8) ?? "").prefix(600) },
-                        run: { a in await server.call(toolName, argumentsJSON: String(data: HTTP.json(a.dict), encoding: .utf8) ?? "{}") }))
+                        run: { a in await server.call(toolName, argumentsJSON: String(data: HTTP.json(a.dict), encoding: .utf8) ?? "{}") })
+                    made.destructive = i.destructive
+                    tools.append(made)
                 }
                 groups.append(Self.group(server: name, config: cfg, tools: infos.map { Self.wireName(server: name, tool: $0.name) }))
                 st.append((name, "\(infos.count) tools" + (server.isRemote ? " · web" : "")))

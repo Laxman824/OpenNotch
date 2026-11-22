@@ -84,6 +84,10 @@ final class NotchController: ObservableObject {
     private var fileDragUntil = Date.distantPast
     private var dragBaseline = NSPasteboard(name: .drag).changeCount
     private var peekTimer: Timer?
+    /// Pointer was over an alert card with buttons until this moment (+ grace): keep the card up.
+    private var alertHoverUntil = Date.distantPast
+    /// The alert card is showing an answer (`Presence.inPlace`): taller, and held until closed or left alone.
+    @Published private(set) var alertTall = false
     weak var backend: Backend?
     weak var hub: Hub?
     weak var handsFree: HandsFree?
@@ -154,7 +158,7 @@ final class NotchController: ObservableObject {
         hud != nil || (backend?.busy ?? false) || (backend?.needsUser ?? false)
             || (handsFree?.isOn ?? false) || (backend?.unseenAnswer ?? false) || hub?.timers.kind != nil
             || (backend?.nowPlaying.playing ?? false) || KeepAwake.shared.isOn || privacy.active
-            || TodayModel.shared.earMeeting != nil
+            || TodayModel.shared.earMeeting != nil || finale != nil
     }
 
     enum EarActivity { case hud, agent, meeting, timer, music, privacy, awake, none }
@@ -176,6 +180,35 @@ final class NotchController: ObservableObject {
             && (UserDefaults.standard.string(forKey: "character.style") ?? "puff") == "puff"
     }
     var perchEarWidth: CGFloat { max(40, notchSize.height + 8) }
+    /// How the last turn ended, acted out for a moment in the closed notch (confetti / rain cloud).
+    @Published private(set) var finale: Finale?
+    private var finaleWork: DispatchWorkItem?
+
+    /// A turn ended while the notch is closed: Puff waves with a close-up and confetti (or sits under a rain cloud on
+    /// failure) for ~2.2 s; after "done" the answer peeks out as before. Robot style: just the peek.
+    func showFinale(_ f: Finale) {
+        guard mode == .collapsed else { return }
+        guard (UserDefaults.standard.string(forKey: "character.style") ?? "puff") == "puff" else {
+            if f == .done { peek() }
+            return
+        }
+        finaleWork?.cancel()
+        finale = f
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.finale = nil
+            if f == .done { self.peek() }
+        }
+        finaleWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + (f == .done ? 2.2 : 2.6), execute: w)
+    }
+
+    /// The closed notch acts out the AI's work (WorkingEar) — busy, nothing waiting on you, Puff style.
+    var showsWorkingPuff: Bool {
+        guard let b = backend, b.busy || finale != nil, b.approvals.isEmpty, b.question == nil,
+              !(handsFree?.isOn ?? false) else { return false }
+        return (UserDefaults.standard.string(forKey: "character.style") ?? "puff") == "puff"
+    }
 
     /// Apps using the microphone / camera right now (PrivacyMonitor).
     @Published var privacy = PrivacyState()
@@ -206,7 +239,7 @@ final class NotchController: ObservableObject {
     var earActivity: EarActivity {
         if hud != nil { return .hud }
         if (backend?.busy ?? false) || (backend?.needsUser ?? false) || (handsFree?.isOn ?? false)
-            || (backend?.unseenAnswer ?? false) { return .agent }
+            || (backend?.unseenAnswer ?? false) || finale != nil { return .agent }
         if TodayModel.shared.earMeeting != nil { return .meeting }       // a meeting in ≤ 15 min beats a timer
         if hub?.timers.kind != nil { return .timer }
         if backend?.nowPlaying.playing ?? false { return .music }
@@ -251,6 +284,7 @@ final class NotchController: ObservableObject {
         case .awake: return 62
         case .meeting: return 104
         case .privacy: return 104
+        case .agent where showsWorkingPuff: return 124      // Puff at work + a few words
         default: return 65
         }
     }
@@ -263,7 +297,8 @@ final class NotchController: ObservableObject {
         case .player: return CGSize(width: max(notchSize.width + 2 * 112, 440), height: notchSize.height + 124)
         case .mirror: return CGSize(width: 380, height: notchSize.height + 250)
         case .peekaboo: return CGSize(width: notchSize.width + (peekLine == nil ? 20 : 250), height: notchSize.height + 64)
-        case .alert: return CGSize(width: max(notchSize.width + 280, 480), height: notchSize.height + 64)
+        case .alert: return alertTall ? CGSize(width: max(notchSize.width + 340, 540), height: notchSize.height + 250)
+                                      : CGSize(width: max(notchSize.width + 280, 480), height: notchSize.height + 64)
         case .expanded: return expandedSize
         }
     }
@@ -283,6 +318,7 @@ final class NotchController: ObservableObject {
         self.perchHost = perch
         layoutPerch()
         panel.contentView = container
+        panel.appearance = NSAppearance(named: .darkAqua)    // the notch is always dark, whatever the system theme
         panel.orderFrontRegardless()
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -334,6 +370,10 @@ final class NotchController: ObservableObject {
 
         if mode == .collapsed && !over { maybePeek() }
         switch mode {
+        case .alert where alert?.hasActions ?? false:
+            // A card with buttons: the pointer is on its way to a button. Hold it up, never hover-open the panel.
+            hoverSince = nil
+            if over { alertHoverUntil = max(alertHoverUntil, Date().addingTimeInterval(1.5)) }
         case .collapsed, .peek, .hello, .alert:
             // Dwell before opening, so sweeping to the menu bar doesn't trigger it.
             // The notch swells slightly during the dwell — feedback that it
@@ -484,6 +524,7 @@ final class NotchController: ObservableObject {
 
     func collapse() {
         liveWork?.cancel()
+        alertTall = false
         contentLive = false
         pinned = false
         focusInput = false
@@ -517,11 +558,29 @@ final class NotchController: ObservableObject {
         var seconds = seconds
         if case .proposal = a { seconds = max(seconds, 12) }        // give time to read and act
         alert = a
+        alertHoverUntil = .distantPast
+        alertTall = false
         withAnimation(Motion.peek) { mode = .alert }
+        scheduleAlertClose(after: seconds)
+    }
+
+    /// A nudge is answering inside its card: grow it and keep it up while the answer is written; once written,
+    /// it stays 45 s (longer while the pointer is on it) or until closed.
+    func holdAlert(answering: Bool) {
+        guard mode == .alert else { return }
+        withAnimation(Motion.open) { alertTall = true }
+        alertHoverUntil = answering ? .distantFuture : Date().addingTimeInterval(45)
+        scheduleAlertClose(after: 0.5)
+    }
+
+    /// Tuck the alert back in after `seconds` — unless the pointer is (or just was) on a card with buttons,
+    /// then look again shortly, so it closes ~1.5 s after the pointer leaves.
+    private func scheduleAlertClose(after seconds: Double) {
         peekTimer?.invalidate()
         peekTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.mode == .alert else { return }
+                if Date() < self.alertHoverUntil { self.scheduleAlertClose(after: 0.5); return }
                 withAnimation(Motion.close) { self.mode = .collapsed }
             }
         }

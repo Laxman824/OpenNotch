@@ -11,6 +11,15 @@ enum NotchAlert: Equatable {
     case info(icon: String, text: String)
     case proposal(Proposal)
     case nudge(Nudge)
+
+    /// Has buttons to press. Such a card must stay put under the pointer: hovering it never opens the full panel
+    /// (that swapped the card for the panel before the click landed) and it doesn't time out while hovered.
+    var hasActions: Bool {
+        switch self {
+        case .hydration, .proposal, .nudge: return true
+        case .timerDone, .capture, .info: return false
+        }
+    }
 }
 
 @MainActor

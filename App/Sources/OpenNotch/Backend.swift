@@ -115,6 +115,10 @@ struct Approval: Identifiable, Equatable {
     var spoken: String = ""
     /// "Allow git in this chat" — nil when this call can't be pre-approved.
     var allowLabel: String? = nil
+    /// "Always allow “git status”" — nil when this can't be allowed forever.
+    var alwaysLabel: String? = nil
+    /// "Deletes something" / "Sends to other people"… (ApprovalLogic.kind) — such cards never offer "Always".
+    var kind: String? = nil
 }
 
 /// The UI's view of the assistant: transcript, busy state, approvals,
@@ -323,6 +327,17 @@ final class Backend: ObservableObject {
         }
     }
 
+    /// A nudge's answer shown inside its card: copied text is fenced and trimmed to fit the model (Apple ≈ 12k chars),
+    /// tools are read-only (`completeWithTools` drops anything else). Nothing is added to the chat.
+    func answerInPlace(_ prompt: String, clip: String?, tools: Set<String>, _ done: @escaping (CallResult) -> Void) {
+        var full = prompt
+        if let clip {
+            let room = max(2_000, min(20_000, core.provider.contextChars / 2))
+            full += "\n\nThe text I copied:\n" + TurnPolicy.fence(String(clip.prefix(room)), tool: "clipboard")
+        }
+        if tools.isEmpty { oneshot(full, done) } else { oneshotWithTools(full, tools: tools, done) }
+    }
+
     /// A one-off prompt that may use read-only tools (the morning brief reads calendar, mail, weather).
     func oneshotWithTools(_ prompt: String, tools: Set<String>, _ done: @escaping (CallResult) -> Void) {
         Task {
@@ -434,9 +449,12 @@ final class Backend: ObservableObject {
         core.answerQuestion(id: q.id, answer: text, chosen: chosen)
     }
 
-    func answer(_ approval: Approval, allow: Bool, forChat: Bool = false) {
+    func answer(_ approval: Approval, allow: Bool, forChat: Bool = false, always: Bool = false) {
         approvals.removeAll { $0.id == approval.id }
-        core.approve(id: approval.id, allow: allow, forChat: forChat)
+        core.approve(id: approval.id, allow: allow, forChat: forChat, always: always)
+        if always, let label = approval.alwaysLabel {
+            info("Saved: \(label.replacingOccurrences(of: "Always allow", with: "always allowed")). Remove it in Settings › Permissions.")
+        }
     }
 
     // MARK: agent events
@@ -521,7 +539,8 @@ final class Backend: ObservableObject {
         case "approval":
             approvals.append(Approval(id: ev["id"] as? String ?? "", tool: ev["tool"] as? String ?? "",
                                       preview: ev["preview"] as? String ?? "", spoken: ev["spoken"] as? String ?? "",
-                                      allowLabel: ev["allowLabel"] as? String))
+                                      allowLabel: ev["allowLabel"] as? String, alwaysLabel: ev["alwaysLabel"] as? String,
+                                      kind: ev["kind"] as? String))
             onApproval?()
         case "approval_done":
             approvals.removeAll { $0.id == ev["id"] as? String }

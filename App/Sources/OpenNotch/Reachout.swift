@@ -67,6 +67,12 @@ final class Reachout {
         UserDefaults.standard.set(Array(seen.suffix(300)), forKey: "reachout.seen")
     }
 
+    /// Run the checks now instead of waiting for the 5-minute schedule (`opennotch -m reachout`).
+    func scanNow() {
+        lastScan = .distantPast
+        tick()
+    }
+
     /// Called from Presence's tick while the user is active.
     func tick(now: Date = Date()) {
         guard now.timeIntervalSince(lastScan) >= 5 * 60 else { return }
@@ -96,7 +102,7 @@ final class Reachout {
         return offer("conflict:\(a.id):\(b.id)", Nudge(kind: .conflict, icon: "calendar.badge.exclamationmark",
             title: "Two meetings overlap at \(when)", detail: "\(a.title) · \(b.title)", actionLabel: "Sort it out",
             action: .ask("“\(a.title)” and “\(b.title)” overlap (\(when)). Look at both in my calendar and suggest which to move and to when, "
-                         + "then offer to draft a short reschedule email (draft only).", clip: nil)))
+                         + "and say why in one line.", clip: nil)))
     }
 
     private func offerOverdue(now: Date, day: String) -> Bool {

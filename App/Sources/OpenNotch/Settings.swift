@@ -395,7 +395,8 @@ private struct GeneralPane: View {
     @AppStorage("avatarPalette") private var palette = "aurora"
     @AppStorage("character.style") private var characterStyle = "puff"
     @AppStorage("handsfree.autostart") private var handsFreeAtLaunch = false
-    @AppStorage(Liveliness.pref) private var liveliness = Liveliness.lively.rawValue
+    @AppStorage(Liveliness.pref) private var liveliness = Liveliness.friendly.rawValue
+    @State private var mutedNudges = UserDefaults.standard.stringArray(forKey: PresenceLogic.mutedKey) ?? []
     @ObservedObject private var policy = AnimationPolicy.shared
 
     var body: some View {
@@ -430,7 +431,7 @@ private struct GeneralPane: View {
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Liveliness").font(.system(size: 12.5, weight: .medium))
-                    Text((Liveliness(rawValue: liveliness) ?? .lively).blurb)
+                    Text((Liveliness(rawValue: liveliness) ?? .friendly).blurb)
                         .font(.system(size: 11)).foregroundStyle(Theme.secondary)
                 }
                 Spacer()
@@ -438,6 +439,14 @@ private struct GeneralPane: View {
                     ForEach(Liveliness.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 210)
+            }
+            if !mutedNudges.isEmpty {
+                HStack {
+                    Text("\(mutedNudges.count) kind\(mutedNudges.count == 1 ? "" : "s") of tip turned off (“Not this kind again”)")
+                        .font(.system(size: 11)).foregroundStyle(Theme.secondary)
+                    Spacer()
+                    Button("Bring them back") { UserDefaults.standard.removeObject(forKey: PresenceLogic.mutedKey); mutedNudges = [] }.controlSize(.small)
+                }
             }
             Toggle("Start hands-free at launch", isOn: $handsFreeAtLaunch).toggleStyle(.switch).controlSize(.small)
                 .font(.system(size: 12.5, weight: .medium))
@@ -593,6 +602,38 @@ private struct PermissionsPane: View {
         Section(title: "OpenNotch app") {
             ForEach(model.rows) { PermissionRowView(row: $0) }
         }
+        AlwaysAllowedSection()
+    }
+}
+
+/// "Always allow" rules saved from approval cards (ApprovalRuleStore), each removable.
+private struct AlwaysAllowedSection: View {
+    @State private var rules = ApprovalRuleStore.shared.all()
+
+    var body: some View {
+        Section(title: "Always allowed") {
+            Text("Things you said \(Prefs.name) may do without asking, in any chat. Sending email, deleting, sharing, posting, "
+                 + "paying and setting up schedules or watchers always ask.")
+                .font(.system(size: 11)).foregroundStyle(Theme.secondary)
+            if rules.isEmpty {
+                Text("Nothing yet — choose “Always allow…” on an approval card.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary)
+            }
+            ForEach(rules) { r in
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.shield").foregroundStyle(.green).frame(width: 22)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(ApprovalLogic.describe(r.key)).font(.system(size: 12.5, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                        Text("Since " + r.added.formatted(date: .abbreviated, time: .omitted))
+                            .font(.system(size: 10.5)).foregroundStyle(Theme.tertiary)
+                    }
+                    Spacer()
+                    Button("Remove") { ApprovalRuleStore.shared.remove(r.key); rules = ApprovalRuleStore.shared.all() }
+                        .controlSize(.small)
+                }
+            }
+        }
+        .onAppear { rules = ApprovalRuleStore.shared.all() }
     }
 }
 

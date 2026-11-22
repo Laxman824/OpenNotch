@@ -20,6 +20,10 @@ final class AgentCore {
     private let store: SessionStore?
     private var approvals: [String: CheckedContinuation<Bool, Never>] = [:]
     private var approvalKeys: [String: String] = [:]
+    /// "Always allow" keys offered on open approval cards (ApprovalLogic.alwaysKey).
+    private var alwaysKeys: [String: String] = [:]
+    /// Saved "Always allow" rules (checks inject a temp store).
+    var rules: ApprovalRuleStore = .shared
     /// Open `ask_user` questions: answer (nil = skipped / timed out / stopped) and whether it was one of the options.
     private var questions: [String: CheckedContinuation<(String?, Bool), Never>] = [:]
     /// Files written this turn, for the "changed files" card at the end.
@@ -310,12 +314,18 @@ final class AgentCore {
             rec.add(.question, "ask_user", since: asked, detail: args.str("question") ?? "", result: o.text)
             return o
         }
-        if tool.risk == .confirm && TurnPolicy.isAllowed(tool: tool.name, args: args.dict, allowed: allowedForChat) {
+        let kind = ApprovalLogic.kind(tool: tool.name, destructive: tool.destructive)
+        let chatOK = TurnPolicy.isAllowed(tool: tool.name, args: args.dict, allowed: allowedForChat)
+        let ruleOK = !chatOK && ApprovalLogic.covers(rules.keys, tool: tool.name, args: args.dict, kind: kind)
+        if tool.risk == .confirm && chatOK {
             rec.add(.approval, tool.name, detail: "allowed for this chat (no prompt)")
         }
-        if tool.risk == .confirm && !TurnPolicy.isAllowed(tool: tool.name, args: args.dict, allowed: allowedForChat) {
+        if tool.risk == .confirm && ruleOK {
+            rec.add(.approval, tool.name, detail: "always allowed (your rule in Settings › Permissions)")
+        }
+        if tool.risk == .confirm && !chatOK && !ruleOK {
             let asked = Date()
-            let allowed = await askApproval(tool: tool, args: args)
+            let allowed = await askApproval(tool: tool, args: args, kind: kind)
             let waited = Date().timeIntervalSince(asked)
             rec.add(.approval, tool.name, since: asked, ok: allowed,
                     detail: allowed ? "allowed" : waited >= Self.approvalTimeout - 1 ? "timed out (counts as no)" : "declined")
@@ -368,7 +378,7 @@ final class AgentCore {
         }.joined(separator: "\n")
     }
 
-    private func askApproval(tool: AgentTool, args: ToolArgs) async -> Bool {
+    private func askApproval(tool: AgentTool, args: ToolArgs, kind: RiskKind?) async -> Bool {
         let id = UUID().uuidString
         let timeout = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.approvalTimeout * 1e9))
@@ -377,16 +387,21 @@ final class AgentCore {
         // Register the waiter before announcing it: an answer can arrive synchronously.
         let key = TurnPolicy.allowKey(tool: tool.name, args: args.dict)
         if let key { approvalKeys[id] = key }
+        let always = ApprovalLogic.alwaysKey(tool: tool.name, args: args.dict, kind: kind)
+        if let always { alwaysKeys[id] = always }
         let ok = await withCheckedContinuation { c in
             approvals[id] = c
             let flat = args.dict.compactMapValues { ($0 as? String) ?? ($0 as? NSNumber)?.stringValue }
             var ev: [String: Any] = ["type": "approval", "id": id, "tool": tool.name, "preview": tool.preview(args),
                                      "spoken": VoiceTurn.approvalPhrase(tool: tool.name, args: flat)]
             if let key { ev["allowLabel"] = TurnPolicy.allowLabel(key) }
+            if let always { ev["alwaysLabel"] = ApprovalLogic.alwaysLabel(always) }
+            if let kind { ev["kind"] = kind.label }
             emit?(ev)
         }
         timeout.cancel()
         approvalKeys[id] = nil
+        alwaysKeys[id] = nil
         emit?(["type": "approval_done", "id": id])
         return ok
     }
@@ -428,8 +443,10 @@ final class AgentCore {
     }
 
     /// `forChat`: also allow calls like this one (same program / folder / tool) until the chat changes.
-    func approve(id: String, allow: Bool, forChat: Bool = false) {
+    /// `always`: save the card's "Always allow" rule (this exact command / folder / tool) for every chat.
+    func approve(id: String, allow: Bool, forChat: Bool = false, always: Bool = false) {
         if allow && forChat, let key = approvalKeys[id] { allowedForChat.insert(key) }
+        if allow && always, let key = alwaysKeys[id] { rules.add(key) }
         approvals.removeValue(forKey: id)?.resume(returning: allow)
     }
 
